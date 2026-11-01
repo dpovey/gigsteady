@@ -65,11 +65,13 @@ def gauss_smooth(path: np.ndarray, sig: float) -> np.ndarray:
 
 
 def analyse_track(g: np.ndarray, k: float, fw: int, fh: int, budget: float = 1.10, smoother: str = "l1",
-                  sigma: float = 10.0, fuse_steps: Callable | None = None) -> TrackResult:
+                  sigma: float = 10.0, fuse_steps: Callable | None = None, steps=None) -> TrackResult:
     """g: (n, h, w) uint8 luma at analysis size; k = full width / analysis width.
-    fuse_steps(steps, corr_where_good) -> (steps, report), e.g. gyro fusion; optional."""
+    fuse_steps(steps, corr_where_good) -> (steps, report), e.g. gyro fusion; optional.
+    steps: precomputed picture_steps(g) output, to share between several planners."""
     n, ah, aw = g.shape
-    sp, good, corr = picture_steps(g)
+    sp, good, corr = steps if steps is not None else picture_steps(g)
+    sp = sp.copy()
     report: dict = {}
     if fuse_steps is not None:
         sp, report = fuse_steps(sp, np.where(good, corr, 0.0))

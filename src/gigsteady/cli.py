@@ -52,6 +52,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--jobs", type=int, default=3)
     p.add_argument("--no-render", action="store_true")
     add_shot_options(p)
+    p = sub.add_parser("eval", help="independent checks: gyro-truth <clip> <start:n>...")
+    p.add_argument("what", choices=["gyro-truth"])
+    p.add_argument("rest", nargs=argparse.REMAINDER)
     a = ap.parse_args(argv)
     if a.cmd == "probe":
         from .probe import probe
@@ -59,6 +62,9 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "stabilise":
         from .pipeline import stabilise
         stabilise(a.clip, a.in_frame, a.out_frame, a.output, options(a), render_video=not a.no_render)
+    elif a.cmd == "eval":
+        from .eval import gyro_truth
+        gyro_truth.main(a.rest)
     elif a.cmd == "batch":
         from .batch import run_batch
         rows = run_batch(a.shots, a.job, options(a), a.jobs, not a.no_render)
