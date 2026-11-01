@@ -132,7 +132,7 @@ def render(src: str, start: int, n: int, A: np.ndarray, out: Path, fuser=None, g
 
 
 def stabilise(src: str, in_frame: int, out_frame: int, out: Path, opt: Options = Options(),
-              log=print) -> dict:
+              log=print, render_video: bool = True) -> dict:
     """Stabilise source frames [in_frame, out_frame) plus handles (clamped at the file's ends) into `out`."""
     t0 = time.time()
     clip = probe(src)
@@ -148,16 +148,19 @@ def stabilise(src: str, in_frame: int, out_frame: int, out: Path, opt: Options =
     A = output_matrices(a["p"], a["k"], zoom, clip.width, clip.height)
     t1 = time.time()
     use_gpu = opt.gpu and _gpu_ok()
-    fuser = make_fuser(a["mode"], Options(**{**asdict(opt), "gpu": use_gpu}))
-    partial = out.with_name(out.stem + ".partial" + out.suffix)
-    render(src, start, n, A, partial, fuser, use_gpu, opt.encoder)
-    os.replace(partial, out)
+    fuser = None
+    if render_video:
+        fuser = make_fuser(a["mode"], Options(**{**asdict(opt), "gpu": use_gpu}))
+        partial = out.with_name(out.stem + ".partial" + out.suffix)
+        render(src, start, n, A, partial, fuser, use_gpu, opt.encoder)
+        os.replace(partial, out)
     rep = {"src": src, "in": in_frame, "out": out_frame, "start": start, "end": end,
            "handle_in": in_frame - start, "handle_out": end - out_frame, "frames": n,
            "fps": f"{clip.fps.numerator}/{clip.fps.denominator}", "zoom": zoom, **a["report"],
            "fusion": getattr(fuser, "stats", None), "gpu": use_gpu,
            "analysis_s": round(t1 - t0, 1), "render_s": round(time.time() - t1, 1),
-           "options": asdict(opt), "options_key": opt.key(), "version": __version__, "output": str(out)}
+           "options": asdict(opt), "options_key": opt.key(), "version": __version__,
+           "output": str(out) if render_video else None}
     out.with_suffix(".json").write_text(json.dumps(rep, indent=1))
     path_csv(out.with_suffix(".csv"), a, start)
     log(f"{out.name}: {a['mode']} zoom {zoom} matched {rep['matched']:.0%} "
