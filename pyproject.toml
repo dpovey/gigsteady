@@ -1,0 +1,33 @@
+[project]
+name = "gigsteady"
+version = "0.1.0"
+description = "Concert-footage stabiliser: lock-off and tracked paths, gyro fusion, vibration de-blur; CLI and DaVinci Resolve script"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "numpy>=2.0",
+    "scipy>=1.13",
+    "opencv-python-headless>=4.10",
+]
+
+[project.optional-dependencies]
+gpu = ["torch>=2.5"]
+
+[project.scripts]
+gigsteady = "gigsteady.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gigsteady"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["footage: needs the media drives (BOTTB, BOTTB SYD26); slow"]
+addopts = "-m 'not footage'"
