@@ -43,7 +43,7 @@ def decode_gray(path: str, start: int, n: int, width: int = 960) -> np.ndarray:
     """Frames [start, start+n) as (n, h, w) uint8 luma at analysis size."""
     clip = probe(path)
     w, h = analysis_size(clip, width)
-    raw = subprocess.run([*_input(clip, start, n), "-vf", f"scale={w}:{h}:flags=area,format=gray",
+    raw = subprocess.run([*_input(clip, start, n), "-vf", f"scale={w}:{h},format=gray",
                           "-f", "rawvideo", "-"], capture_output=True, check=True).stdout
     return np.frombuffer(raw, np.uint8).reshape(-1, h, w)
 
