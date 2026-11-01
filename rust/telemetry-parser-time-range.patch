@@ -1,0 +1,44 @@
+--- /tmp/lib.rs.orig	2026-11-01 15:49:28
++++ src/lib.rs	2026-11-01 15:49:46
+@@ -57,6 +57,10 @@
+     pub tag_blacklist: HashSet<TagFilter>,
+     /// If the main file doesn't contain any data, don't look for sidecar files
+     pub dont_look_for_sidecar_files: bool,
++    /// gigsteady patch: parse only metadata samples whose time (ms from the file start) overlaps this range.
++    /// Supported by the Sony MP4 parser; samples outside are skipped before their bytes are read, so memory is
++    /// bounded by the range instead of the file (a 100-min FX30 file otherwise peaks at ~24 GB)
++    pub time_range_ms: Option<(f64, f64)>,
+ }
+ 
+ macro_rules! impl_formats {
+--- /tmp/sony.rs.orig	2026-11-01 15:49:28
++++ src/sony/mod.rs	2026-11-01 15:49:46
+@@ -81,10 +81,19 @@
+         } else {
+             let mut samples = Vec::new();
+             let cancel_flag2 = cancel_flag.clone();
+-            util::get_metadata_track_samples(stream, size, true, |mut info: SampleInfo, data: &[u8], file_position: u64, _video_md: Option<&VideoMetadata>| {
++            let range = options.time_range_ms;
++            util::read_track_samples(stream, size, mp4parse::TrackType::Metadata, true, |mut info: SampleInfo, sample, _video_md: Option<&VideoMetadata>| {
++                let file_position = sample.position();
+                 if size > 0 {
+                     progress_cb(file_position as f64 / size as f64);
+                 }
++                // gigsteady patch: skip samples outside the requested range before reading them
++                if let Some((t0, t1)) = range {
++                    if info.timestamp_ms + info.duration_ms < t0 || info.timestamp_ms > t1 { return Ok(()); }
++                }
++                let len = sample.size();
++                if len <= 4 { return Ok(()); }
++                let Some(data) = sample.read(0, len)? else { return Ok(()); };
+                 if Self::detect_metadata(data) {
+                     let mut map = GroupedTagMap::new();
+                     if Self::parse_metadata(&data[0x1C..], &options, &mut map).is_ok() {
+@@ -95,6 +104,7 @@
+                         }
+                     }
+                 }
++                Ok(())
+             }, cancel_flag)?;
+             if let Some(profile) = lens_profile::read(stream, size) {
+                 if let Some(map) = samples.first_mut().and_then(|x| x.tag_map.as_mut()) {

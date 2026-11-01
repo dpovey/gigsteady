@@ -1,0 +1,11 @@
+[package]
+name = "gs-gyro"
+version = "0.1.0"
+edition = "2021"
+description = "gigsteady: ranged dump of Sony rtmd motion metadata (IMU, IBIS tables, frame timing)"
+
+[dependencies]
+telemetry-parser = { path = "../vendor/telemetry-parser" }
+
+[profile.release]
+debug = false

@@ -1,0 +1,581 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright © 2021 Adrian <adrian.eddy at gmail>
+
+pub mod klv;
+
+mod eac;
+mod fusion;
+mod lens_profile;
+mod udta;
+
+use std::io::*;
+use std::sync::{ Arc, atomic::AtomicBool };
+use byteorder::{ ReadBytesExt, BigEndian };
+
+use crate::tags_impl::*;
+use crate::*;
+use klv::KLV;
+use memchr::memmem;
+
+#[derive(Default)]
+pub struct GoPro {
+    pub model: Option<String>,
+    extra_gpmf: Option<GroupedTagMap>,
+    /// The `moov/udta` `GPMF` box, verbatim. Kept beside the flattened
+    /// [`extra_gpmf`](Self::extra_gpmf) because the 360 bodies write the same
+    /// keys under several `DEVC`s and flattening keeps only the last of each.
+    udta_gpmf: Option<Vec<u8>>,
+    /// The clip's own path. A Fusion half says which lens it holds in its NAME
+    /// and nowhere in its bytes, so the detector has to keep it.
+    path: Option<std::path::PathBuf>,
+    frame_readout_time: Option<f64>,
+    has_cori: bool,
+    is_raw_gpmf: bool,
+}
+
+/// The `DEVC` stream of the `moov/udta` `GPMF` box whose fourcc sits at
+/// `key_pos`, i.e. the box less its `[size][GPMF]` header.
+///
+/// `None` for a size field that does not describe a box inside the buffer,
+/// which is what a truncated file hands over — and what used to be an
+/// out-of-range slice.
+fn udta_gpmf(buffer: &[u8], key_pos: usize) -> Option<&[u8]> {
+    let start = key_pos.checked_sub(4)?;
+    let len = (&buffer[start..]).read_u32::<BigEndian>().ok()? as usize;
+    // Eight for the box header and eight more for the `DEVC` KLV the caller is
+    // guaranteed by having matched on it.
+    (len >= 16).then(|| buffer.get(start + 8..start.checked_add(len)?))?
+}
+
+impl GoPro {
+    pub fn camera_type(&self) -> String {
+        "GoPro".to_owned()
+    }
+    pub fn has_accurate_timestamps(&self) -> bool {
+        self.has_cori
+    }
+    pub fn possible_extensions() -> Vec<&'static str> {
+        vec!["mp4", "mov", "360", "gpmf", "lrv"]
+    }
+    pub fn frame_readout_time(&self) -> Option<f64> {
+        self.frame_readout_time
+    }
+    pub fn normalize_imu_orientation(v: String) -> String {
+        v
+    }
+
+    pub fn detect<P: AsRef<std::path::Path>>(buffer: &[u8], filepath: P, options: &crate::InputOptions) -> Option<Self> {
+        let mut ret = None;
+
+        if buffer.len() > 8 && &buffer[0..4] == b"DEVC" {
+            if let Ok(map) = Self::parse_metadata(buffer, GroupId::Default, true, options) {
+                let mut obj = Self::default();
+                for v in map.values() {
+                    if let Some(v) = v.get_t(TagId::Unknown(0x4D494E46/*MINF*/)) as Option<&String> {
+                        obj.model = Some(v.clone());
+                    }
+                    if let Some(v) = v.get_t(TagId::Unknown(0x53524F54/*SROT*/)) as Option<&f32> {
+                        obj.frame_readout_time = Some(*v as f64);
+                    }
+                    if obj.model.is_some() && obj.frame_readout_time.is_some() { break; }
+                }
+                obj.extra_gpmf = Some(map);
+                obj.is_raw_gpmf = true;
+                ret = Some(obj);
+            }
+        }
+
+        if let Some(devices) = memmem::find(buffer, b"GPMFDEVC").and_then(|pos| udta_gpmf(buffer, pos)) {
+            let mut obj = Self::default();
+
+            // Past the first `DEVC`'s own KLV header, so the walk starts on its
+            // children and every later `DEVC` arrives as a container. Four bytes
+            // further in used to be enough, because a KLV walk that starts
+            // inside a header resynchronises on the next one — at the cost of
+            // the `DVID` it stepped over.
+            if let Ok(map) = Self::parse_metadata(&devices[8..], GroupId::Default, true, &crate::InputOptions::default()) {
+                for v in map.values() {
+                    if let Some(v) = v.get_t(TagId::Unknown(0x4D494E46/*MINF*/)) as Option<&String> {
+                        obj.model = Some(v.clone());
+                    }
+                    if let Some(v) = v.get_t(TagId::Unknown(0x53524F54/*SROT*/)) as Option<&f32> {
+                        obj.frame_readout_time = Some(*v as f64);
+                    }
+                    if obj.model.is_some() && obj.frame_readout_time.is_some() { break; }
+                }
+                obj.extra_gpmf = Some(map);
+            }
+            // …and the same bytes kept unflattened, for the geometry walk.
+            obj.udta_gpmf = Some(devices.to_vec());
+            ret = Some(obj);
+        } else if memmem::find(buffer, b"GoPro MET").is_some() {
+            ret = Some(Self::default());
+        }
+
+        if ret.is_none() || ret.as_ref().unwrap().model.is_none() {
+            // Find model name in GPRO section in `mdat` at the beginning of the file
+            if let Some(p1) = memmem::find(buffer, b"GPRO") {
+                if let Some(model) = util::find_between_with_offset(&buffer[p1..(p1+1024).min(buffer.len())], b"HERO", b'\0', -4) {
+                    if let Some(obj) = &mut ret {
+                        obj.model = Some(model);
+                    } else {
+                        ret = Some(Self { model: Some(model), ..Default::default() });
+                    }
+                }
+            }
+        }
+        if let Some(obj) = &mut ret {
+            obj.path = Some(filepath.as_ref().to_owned());
+        }
+        ret
+    }
+
+    pub fn parse<T: Read + Seek, F: Fn(f64)>(&mut self, stream: &mut T, size: usize, progress_cb: F, cancel_flag: Arc<AtomicBool>, options: crate::InputOptions) -> Result<Vec<SampleInfo>> {
+        let mut samples = Vec::new();
+        if let Some(extra) = &self.extra_gpmf {
+            samples.push(SampleInfo { tag_map: Some(extra.clone()), ..Default::default() });
+        }
+
+        let mut fps = None;
+        let mut video_dim = None;
+
+        if self.is_raw_gpmf {
+            let mut data = Vec::with_capacity(size);
+            stream.read_to_end(&mut data)?;
+            for pos in memmem::find_iter(&data, b"DEVC") {
+                let chunk = &data[pos..];
+                if Self::detect_metadata(chunk) {
+                    let next = memmem::find(&chunk[8..], b"DEVC").unwrap_or(chunk.len() - 8) + 8;
+                    let res = GoPro::parse_metadata(&chunk[8..next], GroupId::Default, false, &options);
+                    if let Ok(mut map) = res {
+                        self.process_map(&mut map);
+                        samples.push(SampleInfo { tag_map: Some(map), ..Default::default() });
+                        if options.probe_only {
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            let cancel_flag2 = cancel_flag.clone();
+            let ctx = util::get_metadata_track_samples(stream, size, true, |mut info: SampleInfo, data: &[u8], file_position: u64, _video_md: Option<&VideoMetadata>| {
+                if size > 0 {
+                    progress_cb(file_position as f64 / size as f64);
+                }
+                if Self::detect_metadata(data) {
+                    if let Ok(mut map) = GoPro::parse_metadata(&data[8..], GroupId::Default, false, &options) {
+                        self.process_map(&mut map);
+                        info.tag_map = Some(map);
+                        samples.push(info);
+                    }
+                }
+                if options.probe_only {
+                    cancel_flag2.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }, cancel_flag)?;
+            if !ctx.tracks.is_empty() {
+                fps = util::get_fps_from_track(&ctx.tracks[0]);
+            }
+            // The FIRST video track's coded size. Both strips of a `.360` are
+            // the same size and a Fusion half has one track, so one answer
+            // serves every 360 body.
+            video_dim = ctx.tracks.iter()
+                .filter(|x| x.track_type == mp4parse::TrackType::Video)
+                .filter_map(|x| x.tkhd.as_ref())
+                .map(|tkhd| (tkhd.width >> 16, tkhd.height >> 16))
+                .find(|(w, h)| *w > 0 && *h > 0);
+        }
+        self.process_samples(&mut samples, fps, &options);
+
+        if self.model.as_ref().map(|x| x.contains("HERO5")).unwrap_or_default() {
+            if samples.is_empty() {
+                samples.push(SampleInfo { tag_map: Some(GroupedTagMap::default()), ..Default::default() });
+            }
+            let first_sample = samples.first_mut().unwrap();
+            if let Some(ref mut first_map) = first_sample.tag_map {
+                if let Ok(_) = stream.seek(SeekFrom::Start(0)) {
+                    while let Ok((typ, _offs, size, header_size)) = util::read_box(stream) {
+                        if size == 0 || typ == 0 { break; }
+                        let org_pos = stream.stream_position()?;
+                        if typ == fourcc("moov") || typ == fourcc("udta") {
+                            continue; // go inside these boxes
+                        } else {
+                            if typ == fourcc("SETT") {
+                                let buf = util::read_box_data(stream, size, header_size)?;
+                                if buf.len() > 8 {
+                                    match buf[5] {
+                                        0x00 => util::insert_tag(first_map, tag!(parsed GroupId::Default, TagId::Unknown(0x45495341), "EISA", String, |v| v.clone(), "N".into(), vec![]), &options),
+                                        0x02 => util::insert_tag(first_map, tag!(parsed GroupId::Default, TagId::Unknown(0x45495341), "EISA", String, |v| v.clone(), "N".into(), vec![]), &options),
+                                        0x10 => util::insert_tag(first_map, tag!(parsed GroupId::Default, TagId::Unknown(0x45495341), "EISA", String, |v| v.clone(), "Y".into(), vec![]), &options),
+                                        _ => log::debug!("Unknown stab byte {}", util::to_hex(&buf)),
+                                    }
+                                    match buf[7] {
+                                        0x00 => util::insert_tag(first_map, tag!(parsed GroupId::Default, TagId::Unknown(0x56464f56), "VFOV", String, |v| v.clone(), "W".into(), vec![]), &options),
+                                        0x40 => util::insert_tag(first_map, tag!(parsed GroupId::Default, TagId::Unknown(0x56464f56), "VFOV", String, |v| v.clone(), "W".into(), vec![]), &options),
+                                        0x41 => util::insert_tag(first_map, tag!(parsed GroupId::Default, TagId::Unknown(0x56464f56), "VFOV", String, |v| v.clone(), "M".into(), vec![]), &options),
+                                        0x42 => util::insert_tag(first_map, tag!(parsed GroupId::Default, TagId::Unknown(0x56464f56), "VFOV", String, |v| v.clone(), "N".into(), vec![]), &options),
+                                        0x44 => util::insert_tag(first_map, tag!(parsed GroupId::Default, TagId::Unknown(0x56464f56), "VFOV", String, |v| v.clone(), "L".into(), vec![]), &options),
+                                        0x63 => util::insert_tag(first_map, tag!(parsed GroupId::Default, TagId::Unknown(0x56464f56), "VFOV", String, |v| v.clone(), "S".into(), vec![]), &options),
+                                        _ => log::debug!("Unknown lens byte {}", util::to_hex(&buf)),
+                                    }
+                                }
+                            }
+                            stream.seek(SeekFrom::Start(org_pos + size - header_size as u64))?;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Build a native lens profile from the in-camera POLY calibration, if present.
+        lens_profile::insert_lens_profile(&mut samples, self.model.as_deref(), &options);
+
+        // The camera's own 360 geometry, out of the `udta` box read one device
+        // at a time. It goes at its own tag and never at `Lens/Data`: that one
+        // is the single-lens JSON profile above, tags are last-wins per (group,
+        // id), and a rig-shaped object there would deserialise into an empty
+        // lens profile downstream and then suppress the lens-database lookup.
+        if let (Some(gpmf), Some(dim)) = (self.udta_gpmf.as_deref(), video_dim) {
+            let devices = udta::devices(gpmf, &options);
+            let rig = eac::camera_rig(&devices, dim)
+                .or_else(|| {
+                    fusion::camera_rig(
+                        &devices,
+                        self.model.as_deref(),
+                        self.path.as_deref(),
+                        dim,
+                        crate::rig::readout(self.frame_readout_time),
+                    )
+                });
+            if let Some(camera_rig) = rig {
+                if samples.is_empty() {
+                    samples.push(SampleInfo { tag_map: Some(GroupedTagMap::default()), ..Default::default() });
+                }
+                if let Some(map) = samples[0].tag_map.as_mut() {
+                    util::insert_tag(map, tag!(parsed GroupId::Lens, TagId::Rig, "Camera rig", CameraRig, |v: &crate::rig::CameraRig| serde_json::to_string(v).unwrap_or_default(), camera_rig, vec![]), &options);
+                }
+            }
+        }
+
+        Ok(samples)
+    }
+
+    fn detect_metadata(data: &[u8]) -> bool {
+        data.len() > 8 && &data[0..4] == b"DEVC"
+    }
+
+    pub fn parse_metadata(data: &[u8], group_id: GroupId, force_group: bool, options: &crate::InputOptions) -> Result<GroupedTagMap> {
+        let mut slice = Cursor::new(data);
+        let datalen = data.len() as u64;
+        let mut map = GroupedTagMap::new();
+
+        let mut last_type = None;
+
+        while slice.position() < datalen {
+            let start_pos = slice.position() as usize;
+            if datalen as i64 - start_pos as i64 >= 8 {
+                let mut klv = KLV::parse_header(&mut slice)?;
+                let pos = slice.position() as usize;
+
+                let len = klv.data_len();
+                if len == 0 { continue; }
+
+                let full_tag_data = &data[start_pos..(pos + len)];
+                let tag_data      = &data[pos      ..(pos + len)];
+
+                slice.seek(SeekFrom::Current(klv.aligned_data_len() as i64))?;
+
+                if klv.data_type == 0 { // Container
+                    let container_group = if force_group { group_id.clone() } else { KLV::group_from_key(GoPro::get_last_klv(tag_data)?) };
+                    for (g, v) in GoPro::parse_metadata(tag_data, container_group, force_group, options)? {
+                        let group_map = map.entry(g).or_insert_with(TagMap::new);
+                        group_map.extend(v);
+                    }
+                    continue;
+                }
+
+                if &klv.key == b"TYPE" {
+                    if let TagValue::String(typedef) = klv.parse_data(full_tag_data) {
+                        last_type = Some(typedef.get().clone());
+                        continue;
+                    }
+                }
+                if klv.data_type == b'?' && last_type.is_some() {
+                    klv.custom_type = last_type.clone();
+                }
+
+                util::insert_tag(&mut map, TagDescription {
+                    group:       group_id.clone(),
+                    id:          klv.tag_id(),
+                    description: klv.key_as_string(),
+                    value:       klv.parse_data(full_tag_data),
+                    native_id:   Some((&klv.key[..]).read_u32::<BigEndian>()?)
+                }, options);
+            } else {
+                break;
+            }
+        }
+
+        Ok(map)
+    }
+
+    fn process_map(&self, tag_map: &mut GroupedTagMap) {
+        for (g, v) in tag_map.iter_mut() {
+            // If we have ORIN and ORIO but not MTRX, construct MTRX from ORIN and ORIO and insert to the map
+            if v.contains_key(&TagId::OrientationIn) && v.contains_key(&TagId::OrientationOut) && !v.contains_key(&TagId::Matrix) {
+                crate::try_block!({
+                    let m = KLV::orientations_to_matrix(
+                        (v.get_t(TagId::OrientationIn)  as Option<&String>)?,
+                        (v.get_t(TagId::OrientationOut) as Option<&String>)?
+                    )?;
+                    v.insert(TagId::Matrix,
+                        crate::tag!(parsed g.clone(), TagId::Matrix, "MTRX", Vec_Vec_f32, |v| format!("{:?}", v), vec![m], Vec::new())
+                    );
+                });
+            }
+
+            // Convert MTRX to Orientation tag
+            if g == &GroupId::Gyroscope || g == &GroupId::Accelerometer || g == &GroupId::Magnetometer {
+                let mut imu_orientation = None;
+                if let Some(m) = v.get_t(TagId::Matrix) as Option<&Vec<Vec<f32>>> {
+                    if !m.is_empty() && !m[0].is_empty() {
+                        imu_orientation = Some(GoPro::mtrx_to_orientation(&m[0]));
+                    }
+                } else if let Some(m) = &self.model {
+                    if m.contains("HERO6") { imu_orientation = Some("ZyX".to_string()); }
+                    if m.contains("HERO7 Silver") { imu_orientation = Some("YXz".to_string()); }
+                }
+                if let Some(o) = imu_orientation {
+                    v.insert(TagId::Orientation, crate::tag!(parsed g.clone(), TagId::Orientation, "IMUO", String, |v| v.to_string(), o, Vec::new()));
+                }
+            }
+        }
+    }
+
+    fn get_timestamp(info: &util::SampleInfo, group_id: &GroupId) -> Option<i64> {
+        if let Some(ref grouped_tag_map) = info.tag_map {
+            for (group, map) in grouped_tag_map {
+                if group == group_id {
+                    let mut tick = 0i64;
+                    if let Some(t) = map.get_t(TagId::Unknown(0x5449434b /*TICK*/)) as Option<&u32> {
+                        tick = (*t as i64) * 1000;
+                    }
+                    let timestamp_us = (map.get_t(TagId::TimestampUs) as Option<&u64>).map(|x| *x as i64).unwrap_or(tick);
+                    return Some(timestamp_us);
+                }
+            }
+        }
+        None
+    }
+
+    fn process_samples(&mut self, samples: &mut Vec<SampleInfo>, fps: Option<f64>, options: &crate::InputOptions) {
+        // Normalize quaternions
+        let mut prev_increment = 0;
+        let mut start_timestamp_us = None;
+        let mut global_ts_cori: f64 = 0.0;
+        let mut global_ts_iori: f64 = 0.0;
+        let global_increment = fps.map(|x| 1000.0 / x);
+        for i in 0..samples.len() {
+            let info = &samples[i];
+            if info.tag_map.is_none() { continue; }
+
+            let grouped_tag_map = info.tag_map.as_ref().unwrap();
+
+            let mut cori = Vec::new();
+            let mut iori = Vec::new();
+            for (group, map) in grouped_tag_map.iter() {
+                if group == &GroupId::CameraOrientation || group == &GroupId::ImageOrientation {
+                    let scale = *(map.get_t(TagId::Scale) as Option<&i16>).unwrap_or(&32767) as f64;
+                    let mut timestamp_us = *(map.get_t(TagId::TimestampUs) as Option<&u64>).unwrap_or(&0) as i64;
+                    // let start_count = *(map.get_t(TagId::Count) as Option<&u32>).unwrap_or(&0);
+                    let next_timestamp_us = samples.get(i + 1).map(|x | Self::get_timestamp(x, &group)).unwrap_or(None);
+                    if start_timestamp_us.is_none() {
+                        start_timestamp_us = Some(timestamp_us);
+                    }
+                    // TODO https://github.com/gopro/gpmf-parser/blob/master/GPMF_utils.c
+                    if let Some(arr) = map.get_t(TagId::Data) as Option<&Vec<Quaternion<i16>>> {
+                        self.has_cori = true;
+                        let sample_count = arr.len() as i64;
+                        let increment = next_timestamp_us.map(|x| (x - timestamp_us) / sample_count).unwrap_or(prev_increment);
+                        prev_increment = increment;
+                        for v in arr.iter() {
+                            let mut ts = timestamp_us - start_timestamp_us.unwrap();
+                            if let Some(global_inc) = global_increment {
+                                if group == &GroupId::CameraOrientation {
+                                    ts = (global_ts_cori * 1000.0).round() as i64;
+                                    global_ts_cori += global_inc;
+                                } else {
+                                    ts = (global_ts_iori * 1000.0).round() as i64;
+                                    global_ts_iori += global_inc;
+                                }
+                            }
+                            let aout = if group == &GroupId::CameraOrientation { &mut cori } else { &mut iori };
+                            aout.push((
+                                ts,
+                                Quaternion {
+                                    w: v.w as f64 / scale,
+                                    x: -v.x as f64 / scale,
+                                    y: v.y as f64 / scale,
+                                    z: v.z as f64 / scale
+                                }
+                            ));
+                            timestamp_us += increment;
+                        }
+                    }
+                }
+            }
+            if !cori.is_empty() && cori.len() == iori.len() {
+                // Multiply CORI * IORI
+                let quat = cori.into_iter().zip(iori.into_iter()).map(|(c, i)| TimeQuaternion {
+                    t: c.0 as f64 / 1000.0,
+                    v: c.1 * i.1
+                }).collect();
+
+                let grouped_tag_map = samples[i].tag_map.as_mut().unwrap();
+                util::insert_tag(grouped_tag_map, tag!(parsed GroupId::Quaternion, TagId::Data, "Quaternion data",  Vec_TimeQuaternion_f64, |v| format!("{:?}", v), quat, vec![]), options);
+            }
+        }
+    }
+    /// Preserve the relative start of each sensor on the shared GPMF clock.
+    /// GoPro's GPMF_utils uses a video-associated timestamp when available,
+    /// otherwise the earliest STMP in the first payload as its clock origin.
+    /// Starting gyro and acceleration independently at zero loses tens of ms
+    /// on Fusion (and aligns measurements from different instants).
+    pub(crate) fn imu_start_times_ms(samples: &[SampleInfo]) -> (f64, f64, f64) {
+        let first = samples.iter().filter_map(|s| s.tag_map.as_ref().map(|m| (s, m)))
+            .find(|(_, m)| m.contains_key(&GroupId::Gyroscope));
+        let Some((packet, tags)) = first else { return (0.0, 0.0, 0.0) };
+        let stamp = |g: &TagMap| (g.get_t(TagId::TimestampUs) as Option<&u64>).copied().filter(|v| *v > 0);
+        // The streams of the video frames, whose stamps GPMF_utils' callers pass as the time base: the exposure time
+        // (SHUT), which gpmf-parser's demo takes, else the sensor ISO (ISOE), both written once per frame
+        let video = [KLV::group_from_key(b"SHUT"), KLV::group_from_key(b"ISOE")].iter()
+            .find_map(|g| tags.get(g).and_then(stamp));
+        // Without STMP the readings start with the packet, at its time in the clip
+        let packet_ms = packet.timestamp_ms;
+        let Some(base) = video.or_else(|| tags.values().filter_map(stamp).min()) else { return (packet_ms, packet_ms, packet_ms) };
+        let offset = |group: GroupId| samples.iter().filter_map(|s| s.tag_map.as_ref()?.get(&group))
+            .find_map(stamp).map_or(packet_ms, |t| packet_ms + (t as f64 - base as f64) / 1000.0);
+        (offset(GroupId::Gyroscope), offset(GroupId::Accelerometer), offset(GroupId::Magnetometer))
+    }
+
+    /// The camera clock's time of a packet's readings of one sensor, in µs: its STMP, or the millisecond stamps of
+    /// the cameras before it (TimestampMs, TICK)
+    pub(crate) fn stamp_us(map: &TagMap) -> Option<i64> {
+        (map.get_t(TagId::TimestampUs) as Option<&u64>).map(|t| *t as i64)
+            .or_else(|| (map.get_t(TagId::TimestampMs) as Option<&u64>).map(|t| (*t as i64) * 1000))
+            .or_else(|| (map.get_t(TagId::Unknown(0x5449434b /*TICK*/)) as Option<&u32>).map(|t| (*t as i64) * 1000))
+    }
+
+    pub fn get_avg_sample_duration(samples: &Vec<SampleInfo>, group_id: &GroupId) -> Option<f64> {
+        // Without stamps, the time of the packets that hold readings of the sensor: its readings span them. A packet that the
+        // track delivers without any, whose stream of the sensor is empty (as cameras write them) or missing, is no time of
+        // theirs, as the timeline puts the readings after it at their own packet's time (`util::time_before_readings`)
+        let mut total_duration_ms = 0.0;
+
+        // The readings between one packet's timestamp and the next one's, over the packets the track delivered one
+        // after another: across packets it didn't deliver (`util::time_missing_between`) the time between the stamps
+        // is also theirs, whose readings aren't here. A packet without readings starts no such span, as the time from
+        // its stamp to the next one is none of theirs: the sensor gave none then. Cameras write an empty stream without
+        // a stamp (a HERO8 whose IMU stops after its first packet keeps a TSMP and nothing else), but a stamp there
+        // would put the time to the next one on no readings. Their counts are the readings delivered rather than the
+        // TSMP totals, which some packets of a HERO5 Session and a HERO10 raise by 4 to 12 fewer than they hold
+        let mut stamped_us = 0i64;
+        let mut stamped_count = 0;
+        let mut previous: Option<(&SampleInfo, i64, usize)> = None;
+        let mut count = 0;
+        for info in samples {
+            if info.tag_map.is_none() { continue; }
+            for (group, map) in info.tag_map.as_ref().unwrap() {
+                if group == group_id {
+                    let tsus = Self::stamp_us(map);
+                    let mut len = 0;
+                    if let Some(t) = map.get_t(TagId::Data) as Option<&Vec<Vector3<i16>>> {
+                        len = t.len();
+                    } else if let Some(t) = map.get_t(TagId::Data) as Option<&Vec<Vector3<f32>>> {
+                        // Fusion stores floating-point IMU readings. Their clock
+                        // uses the same STMP/TICK and sample-count rule as i16.
+                        len = t.len();
+                    } else if let Some(t) = map.get_t(TagId::Data) as Option<&Vec<Quaternion<i16>>> {
+                        len = t.len();
+                    }
+                    count += len;
+                    if len > 0 {
+                        total_duration_ms += info.duration_ms;
+                    }
+                    if let Some(tsus) = tsus {
+                        if let Some((previous_info, previous_tsus, previous_len)) = previous
+                            && previous_len > 0 && util::time_missing_between(previous_info, info) == 0.0 {
+                            stamped_us += tsus - previous_tsus;
+                            stamped_count += previous_len;
+                        }
+                        previous = Some((info, tsus, len));
+                    }
+                }
+            }
+        }
+        if stamped_us > 0 && stamped_count > 0 {
+            Some(stamped_us as f64 / stamped_count as f64 / 1000.0)
+        } else if count > 0 {
+            Some(total_duration_ms / count as f64)
+        } else {
+            None
+        }
+    }
+
+    pub fn get_last_klv(data: &[u8]) -> Result<&[u8]> {
+        let mut slice = Cursor::new(data);
+
+        let mut offset = 0;
+        while slice.position() < data.len() as u64 {
+            offset = slice.position() as usize;
+            let klv = KLV::parse_header(&mut slice)?;
+            slice.seek(SeekFrom::Current(klv.aligned_data_len() as i64))?;
+        }
+        Ok(&data[offset..])
+    }
+
+    fn mtrx_to_orientation(mtrx: &[f32]) -> String {
+        assert!(mtrx.len() == 9);
+
+        (0..3).map(|x| {
+                 if mtrx[x * 3 + 0] > 0.5 { 'X' } else if mtrx[x * 3 + 0] < -0.5 { 'x' }
+            else if mtrx[x * 3 + 1] > 0.5 { 'Y' } else if mtrx[x * 3 + 1] < -0.5 { 'y' }
+            else if mtrx[x * 3 + 2] > 0.5 { 'Z' } else if mtrx[x * 3 + 2] < -0.5 { 'z' }
+            else { panic!("Invalid MTRX {:?}", mtrx) }
+        }).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Packet `index` of a GPMF track, a second long: a gyro stream with its TSMP, `readings` readings when it has data,
+    /// and its STMP when `stamped`, on a camera clock 37 µs ahead of the track's
+    fn packet(index: u64, readings: Option<usize>, stamped: bool) -> SampleInfo {
+        let options = crate::InputOptions::default();
+        let mut map = GroupedTagMap::new();
+        util::insert_tag(&mut map, tag!(parsed GroupId::Gyroscope, TagId::Count, "TSMP", u32, |v| v.to_string(), (index as u32 + 1) * 200, vec![]), &options);
+        if let Some(n) = readings {
+            util::insert_tag(&mut map, tag!(parsed GroupId::Gyroscope, TagId::Data, "GYRO", Vec_Vector3_i16, |v| format!("{:?}", v), vec![Vector3 { x: 1, y: -2, z: 3 }; n], vec![]), &options);
+        }
+        if stamped {
+            util::insert_tag(&mut map, tag!(parsed GroupId::Gyroscope, TagId::TimestampUs, "STMP", u64, |v| v.to_string(), index * 1_000_000 + 37, vec![]), &options);
+        }
+        SampleInfo { sample_index: index, timestamp_ms: index as f64 * 1000.0, duration_ms: 1000.0, tag_map: Some(map), ..Default::default() }
+    }
+
+    #[test]
+    fn readings_are_timed_by_the_stamps_of_the_packets_that_hold_them() {
+        let duration = |packets: Vec<SampleInfo>| GoPro::get_avg_sample_duration(&packets, &GroupId::Gyroscope);
+        let full = |index| packet(index, Some(200), true);
+        assert_eq!(duration((0..4).map(full).collect()), Some(5.0));
+        // A packet the track didn't deliver: the time between the stamps around it is also that of its readings
+        assert_eq!(duration(vec![full(0), full(1), full(3)]), Some(5.0));
+        // A stamped stream without readings: the time to the next stamp is none of theirs
+        assert_eq!(duration(vec![full(0), full(1), packet(2, Some(0), true), full(3)]), Some(5.0));
+        // A sensor that stops after the first packet, whose streams are then empty and unstamped, as a HERO8 writes them
+        assert_eq!(duration(vec![full(0), packet(1, None, false), packet(2, None, false)]), Some(5.0));
+        assert_eq!(duration(vec![packet(0, None, true), packet(1, Some(0), true)]), None);
+    }
+}

@@ -1,0 +1,47 @@
+[package]
+name = "telemetry-parser"
+version = "0.4.0"
+authors = ["Adrian <adrian.eddy@gmail.com>"]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/AdrianEddy/telemetry-parser"
+description = "Library to parse real-time metadata embedded in video files or telemetry from other sources."
+readme = "README.md"
+
+[dependencies]
+mp4parse = { package = "mp4parse-patched", version = "0.17.1", features = ["unstable-api"] }
+byteorder = "1.5"
+pretty-hex = "0.4"
+chrono = "0.4"
+paste = "1.0"
+prost = "0.14"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+serde_yaml = "0.9"
+argh = "0.1"
+hex-literal = "1"
+half = "2.7"
+memchr = "2.8"
+fc-blackbox = { package = "fc-blackbox-patched", version = "0.2.1" }
+csv = "1.4"
+crc32fast = "1.5"
+log = "0.4"
+video-types = { version = "0.1", default-features = false, features = ["serde"] }
+
+quick-xml = { version = "0.42", optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22"
+ndk-context = "0.1.1"
+
+[build-dependencies]
+#prost-build = "*"
+
+[features]
+sony-xml = ["quick-xml", "mp4parse/meta-xml"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+# panic = 'abort'

@@ -6,3 +6,4 @@ rust/*/target/
 *.mov
 *.mp4
 .pytest_cache/
+rust/*/target/
