@@ -34,6 +34,27 @@ def options(a):
                    fuse=a.fuse, fuse_denoise=a.fuse_denoise, gyro="off" if a.no_gyro else "auto", gpu=not a.cpu)
 
 
+def review_cmd(a) -> int:
+    import json
+    import random
+    from . import review
+    if a.kind == "unblind":
+        print(review.unblind(a.source, a.marks))
+        return 0
+    seed = a.seed if a.seed is not None else random.randrange(1 << 30)
+    crop = tuple(int(v) for v in a.crop.split(",")) if a.crop else None
+    if a.kind == "single":
+        items = review.single_items(a.source, a.only)
+    else:
+        if len(a.side) != 2:
+            raise SystemExit("ab needs two --side version=directory")
+        sides = {v: Path(d) for v, d in (s.split("=", 1) for s in a.side)}
+        shots = [s for s in json.loads(a.source.read_text()) if not a.only or s["name"] in a.only]
+        items = review.ab_items(shots, sides)
+    print(review.build(a.kind, items, a.out, a.title, random.Random(seed), seed, a.repeats, crop, a.jobs))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="gigsteady", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -52,6 +73,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--jobs", type=int, default=3)
     p.add_argument("--no-render", action="store_true")
     add_shot_options(p)
+    p = sub.add_parser("review", help="blinded review page: single <job> | ab <shots.json> --side v=dir x2 | unblind")
+    p.add_argument("kind", choices=["single", "ab", "unblind"])
+    p.add_argument("source", type=Path, help="job dir (single), shots.json (ab) or review dir (unblind)")
+    p.add_argument("marks", type=Path, nargs="?", help="unblind: the exported marks CSV")
+    p.add_argument("--out", type=Path, help="review directory")
+    p.add_argument("--side", action="append", default=[], help="ab: version=directory (give two)")
+    p.add_argument("--only", nargs="+", help="shot names to include")
+    p.add_argument("--title", default="gigsteady review")
+    p.add_argument("--repeats", type=int, default=3, help="clips shown twice, unannounced")
+    p.add_argument("--seed", type=int)
+    p.add_argument("--crop", help="x,y of the full-resolution crop (default: frame centre)")
+    p.add_argument("--jobs", type=int, default=3)
     p = sub.add_parser("eval", help="independent checks: gyro-truth <clip> <start:n>...")
     p.add_argument("what", choices=["gyro-truth"])
     p.add_argument("rest", nargs=argparse.REMAINDER)
@@ -65,6 +98,8 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "eval":
         from .eval import gyro_truth
         gyro_truth.main(a.rest)
+    elif a.cmd == "review":
+        return review_cmd(a)
     elif a.cmd == "batch":
         from .batch import run_batch
         rows = run_batch(a.shots, a.job, options(a), a.jobs, not a.no_render)
