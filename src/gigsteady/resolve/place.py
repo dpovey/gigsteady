@@ -3,7 +3,8 @@
 Each step is one change, read back before the next; the first mismatch stops the run (raise Mismatch). Everything
 created (timeline, track, bin, media pool items, timeline items) is recorded in <job>/place_state.json so undo()
 removes exactly that. Resolve 21.1 facts relied on: AddTrack only adds at the top; AppendToTimeline's endFrame is
-exclusive; AddTrack/ImportMedia/AppendToTimeline can clear In/Out and move the playhead (saved and restored).
+exclusive; AddTrack/ImportMedia/AppendToTimeline can clear In/Out and move the playhead (saved and restored);
+GetIsTrackEnabled/GetIsTrackLocked read False on a timeline that isn't the current one (read them while it is).
 """
 from __future__ import annotations
 
@@ -75,6 +76,10 @@ class Placer:
         if cur.GetName() != self.master_name:
             self.p.SetCurrentTimeline(master)
             check(self.p.GetCurrentTimeline().GetName() == self.master_name, "could not open master")
+        # Track enable/lock states read as False on a timeline that isn't current (21.1), so read them now
+        tracks = {t: {"enabled": master.GetIsTrackEnabled("video", t), "locked": master.GetIsTrackLocked("video", t),
+                      "name": master.GetTrackName("video", t)} for t in range(1, master.GetTrackCount("video") + 1)}
+        self.state["master_tracks"] = tracks
         dup = master.DuplicateTimeline(self.dup_name)
         dup = find_timeline(self.p, self.dup_name)
         check(dup is not None, "duplicate not created")
@@ -100,11 +105,11 @@ class Placer:
                 dup.MoveItems(items, {"trackIndex": t + 1}, False)
             got = [(it.GetStart(), it.GetEnd(), it.GetName()) for it in (dup.GetItemListInTrack("video", t + 1) or [])]
             check(got == want and not (dup.GetItemListInTrack("video", t) or []), f"moving track {t} -> {t + 1}")
-            check(not master.GetIsTrackLocked("video", t), f"track {t} is locked")
-            dup.SetTrackEnable("video", t + 1, master.GetIsTrackEnabled("video", t))
-            check(dup.GetIsTrackEnabled("video", t + 1) == master.GetIsTrackEnabled("video", t), f"track {t + 1} enable")
-            dup.SetTrackName("video", t + 1, master.GetTrackName("video", t))
-            check(dup.GetTrackName("video", t + 1) == master.GetTrackName("video", t), f"track name {t + 1}")
+            check(not tracks[t]["locked"], f"track {t} is locked")
+            dup.SetTrackEnable("video", t + 1, tracks[t]["enabled"])
+            check(dup.GetIsTrackEnabled("video", t + 1) == tracks[t]["enabled"], f"track {t + 1} enable")
+            dup.SetTrackName("video", t + 1, tracks[t]["name"])
+            check(dup.GetTrackName("video", t + 1) == tracks[t]["name"], f"track name {t + 1}")
             self.log(f"moved track {t} ({len(items)} items) -> {t + 1}")
         dup.SetTrackEnable("video", 2, True)
         check(dup.GetIsTrackEnabled("video", 2), "track 2 enable")
@@ -113,6 +118,9 @@ class Placer:
         exp = {1: before[1], 2: []}
         exp.update({t + 1: before[t] for t in range(2, n + 1)})
         check(snapshot(dup) == exp, "duplicate's tracks after the shift")
+        want_en = {1: tracks[1]["enabled"], 2: True, **{t + 1: tracks[t]["enabled"] for t in range(2, n + 1)}}
+        got_en = {t: dup.GetIsTrackEnabled("video", t) for t in want_en}
+        check(got_en == want_en, f"duplicate's track enables {got_en} != {want_en}")
 
         # 4. bin + import
         root = self.mp.GetRootFolder()
