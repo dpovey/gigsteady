@@ -17,6 +17,8 @@ class Clip:
     frames: int | None
     timecode: str | None
     has_rtmd: bool
+    color_space: str | None = None  # YUV matrix tag (bt709 ...); None when untagged
+    color_range: str | None = None  # "pc" (full) or "tv" (video); None when untagged
 
     @property
     def scale(self) -> float:
@@ -38,7 +40,10 @@ def probe(path: str) -> Clip:
     if frames is None and "duration" in info.get("format", {}):
         frames = int(round(float(info["format"]["duration"]) * fps))
     rtmd = any(s.get("codec_tag_string") == "rtmd" for s in info["streams"])
-    return Clip(path, int(v["width"]), int(v["height"]), fps, v["codec_name"], v.get("pix_fmt", ""), frames, tc, rtmd)
+    cs = v.get("color_space") if v.get("color_space") not in (None, "unknown", "reserved") else None
+    cr = v.get("color_range") if v.get("color_range") in ("pc", "tv") else None
+    return Clip(path, int(v["width"]), int(v["height"]), fps, v["codec_name"], v.get("pix_fmt", ""), frames, tc, rtmd,
+                cs, cr)
 
 
 def tc_to_frames(tc: str, fps: Fraction) -> int:

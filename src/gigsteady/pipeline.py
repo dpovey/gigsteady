@@ -45,7 +45,9 @@ class Options:
     encoder: str = "prores_videotoolbox"
 
     def key(self) -> str:
-        return hashlib.sha1(json.dumps(asdict(self), sort_keys=True).encode()).hexdigest()[:12]
+        """Resume key: the options plus the code version (an output from older code is never "done")."""
+        from . import __version__
+        return hashlib.sha1(json.dumps({**asdict(self), "version": __version__}, sort_keys=True).encode()).hexdigest()[:12]
 
 
 def check_disk(out: Path, n_frames: int, clip) -> None:
