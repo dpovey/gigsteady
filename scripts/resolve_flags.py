@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from gigsteady.resolve.bridge import connect, guard  # noqa: E402
-from gigsteady.resolve.place import check, find_timeline  # noqa: E402
+from gigsteady.resolve.place import check, find_timeline, find_timeline_by_id  # noqa: E402
 
 guard()
 job = Path(sys.argv[1])
@@ -17,7 +17,7 @@ p = connect().GetProjectManager().GetCurrentProject()
 check(p.GetName() == st["project"] and not p.IsRenderingInProgress(), "wrong project or rendering")
 cur = p.GetCurrentTimeline()
 view = (cur.GetName(), cur.GetCurrentTimecode(), cur.GetMarkInOut().get("video", {}))
-dup = find_timeline(p, st["duplicate"])
+dup = find_timeline_by_id(p, st["created"]["timeline"])
 folder = next(f for f in p.GetMediaPool().GetRootFolder().GetSubFolderList() if f.GetUniqueId() == st["created"]["bin"])
 clips = {Path(c.GetClipProperty("File Path")).stem: c for c in folder.GetClipList()}
 p.SetCurrentTimeline(dup)

@@ -30,6 +30,14 @@ def find_timeline(project, name: str):
     return None
 
 
+def find_timeline_by_id(project, uid: str):
+    for i in range(1, project.GetTimelineCount() + 1):
+        t = project.GetTimelineByIndex(i)
+        if t.GetUniqueId() == uid:
+            return t
+    return None
+
+
 def snapshot(tl) -> dict:
     """Every video item's (track, start, end, name) for comparing a duplicate with its master."""
     return {t: [(it.GetStart(), it.GetEnd(), it.GetName()) for it in (tl.GetItemListInTrack("video", t) or [])]
@@ -211,6 +219,8 @@ def undo(resolve, job: Path, log=print) -> None:
     """Remove exactly what place created: the duplicate timeline (with its items) and the bin's imported clips."""
     st_p = Path(job) / "place_state.json"
     st = json.loads(st_p.read_text())
+    check("adopted" not in st, f"refusing: the duplicate was adopted as the main timeline ({st.get('adopted')}); "
+                               "undo would delete it and the media it plays")
     p = resolve.GetProjectManager().GetCurrentProject()
     check(p.GetName() == st["project"], "different project open")
     check(not p.IsRenderingInProgress(), "a render is in progress")
@@ -255,8 +265,8 @@ def replace_media(resolve, job: Path, new_outputs: Path, log=print) -> dict:
     check(not p.IsRenderingInProgress(), "a render is in progress")
     cur = p.GetCurrentTimeline()
     view = {"timeline": cur.GetName(), "playhead": cur.GetCurrentTimecode(), "inout": cur.GetMarkInOut()}
-    dup = find_timeline(p, st["duplicate"])
-    check(dup is not None and dup.GetUniqueId() == st["created"]["timeline"], "duplicate not found")
+    dup = find_timeline_by_id(p, st["created"]["timeline"])  # by id: it may have been renamed (adopted)
+    check(dup is not None, "duplicate not found")
     p.SetCurrentTimeline(dup)
     check(p.GetCurrentTimeline().GetUniqueId() == dup.GetUniqueId(), "could not open the duplicate")
     try:
