@@ -1,6 +1,6 @@
 [project]
 name = "gigsteady"
-version = "0.1.2"
+version = "0.1.3"
 description = "Concert-footage stabiliser: lock-off and tracked paths, gyro fusion, vibration de-blur; CLI and DaVinci Resolve script"
 requires-python = ">=3.11,<3.13"
 dependencies = [

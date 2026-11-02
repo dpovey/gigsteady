@@ -52,8 +52,9 @@ class Frame:
 
 
 class Fuser:
-    def __init__(self, radius=4, sharp=8.0, denoise=0.0, tau=0.06, min_gain=0.05, threads=8):
+    def __init__(self, radius=4, sharp=8.0, denoise=0.0, tau=0.06, min_gain=0.05, contrast=0.4, threads=8):
         self.radius, self.sharp, self.denoise, self.tau, self.min_gain = radius, sharp, denoise, tau, min_gain
+        self.contrast = contrast
         self.pool = ThreadPoolExecutor(threads)
         self.cache: "OrderedDict[int, Frame]" = OrderedDict()
         self.stats = {"frames": 0, "fused": 0, "tiles": 0, "pairs": 0}
@@ -96,8 +97,13 @@ class Fuser:
             Wf[:, 2] *= FW / AW
             warps.append(Wf)
         moving = np.zeros(c.Y.shape, bool)
+        if self.contrast > 0:  # motion relative to local contrast: catches people moving behind haze (bright, flat)
+            C = np.sqrt(smooth_half((c.Y - c.coarse) ** 2, 8)) + 0.005
         for _, _, Cw in aligned:
-            moving |= np.abs(Cw - c.coarse) / L > self.tau
+            dc = np.abs(Cw - c.coarse)
+            moving |= dc / L > self.tau
+            if self.contrast > 0:
+                moving |= dc / C > self.contrast
         moving = cv2.dilate(moving.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))).astype(bool)
         weights = []
         for Yw, Ew, _ in aligned:

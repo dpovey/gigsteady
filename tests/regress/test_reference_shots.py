@@ -51,7 +51,24 @@ def test_sd_unstab_308139_burst_and_wobble():
     assert rep["mode"] == "lock" and rep["zoom"] <= 1.03 and rep["fusion"]["fused"] >= 35
     r = compare([str(plain), str(fused)])
     s0, s1 = r[str(plain)]["sharp"], r[str(fused)]["sharp"]
-    assert s0[122:124].max() < 75 and s1[122:124].min() >= 88       # prototype: 70 -> 92
+    # burst repaired: prototype 70 -> 92; since the exact BT.709 conversion (v0.1.2) the same frames read 67 -> 86-88
+    assert s0[122:124].max() < 75 and (s1[122:124] - s0[122:124]).min() >= 15
     assert np.median(s1) >= 0.98 * np.median(s0)
     m = measure(str(fused), 0, 159, rep["zoom"])
     assert m["wobble"] <= 0.45 and m["pc_wobble"] <= 0.7               # original 5.4 / 5.2; prototype 0.36 / 0.56
+
+
+def test_no_deblur_ghost_through_haze():
+    """good 4 u SD_rec155859 (Dean, 2026-11-03): people moving behind haze were blended from neighbouring frames.
+    Ghost in the people box on de-blurred frames (10-bit codes, max/mean): gate off 10.3/2.3, 0.5 1.5/0.7,
+    0.4 1.3/0.5 (the default; 0.35 and below lose the SD_unstab_308139 burst repair)."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "eval"))
+    from ghost_check import ghost
+    plain, fused = DEV / "t_155859_plain.mov", DEV / "t_155859_fuse.mov"
+    stabilise(SD, 65899, 66004, plain, Options(handles=0, fuse=0))
+    rep = stabilise(SD, 65899, 66004, fused, Options(handles=0))
+    g, act = ghost(str(plain), str(fused), (1750, 650, 500, 450))
+    on = act > 0                        # frames de-blur actually changed
+    assert rep["fusion"]["fused"] >= 5 and on.sum() >= 5
+    assert g[on].max() < 1.6 and g[on].mean() < 0.65

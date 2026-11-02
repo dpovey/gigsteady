@@ -40,6 +40,7 @@ class Options:
     fuse_denoise: float = 0.0
     fuse_tau: float = 0.06
     fuse_min_gain: float = 0.05
+    fuse_contrast: float = 0.4   # moving gate vs local contrast (0 = off): stops haze ghosts, docs/KNOWN-ISSUES.md
     gyro: str = "auto"            # auto | off
     gpu: bool = True
     encoder: str = "prores_videotoolbox"
@@ -95,7 +96,7 @@ def make_fuser(mode: str, opt: Options):
     radius = opt.fuse if opt.fuse is not None else (4 if mode == "lock" else 0)
     if not radius:
         return None
-    args = (radius, opt.fuse_sharp, opt.fuse_denoise, opt.fuse_tau, opt.fuse_min_gain)
+    args = (radius, opt.fuse_sharp, opt.fuse_denoise, opt.fuse_tau, opt.fuse_min_gain, opt.fuse_contrast)
     if opt.gpu:
         from .gpu import FuserGPU
         return FuserGPU(*args)

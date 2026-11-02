@@ -13,6 +13,7 @@ def add_shot_options(p: argparse.ArgumentParser) -> None:
     p.add_argument("--zoom", type=float, help="force the output zoom")
     p.add_argument("--fuse", type=int, help="vibration de-blur radius (default: 4 in lock mode, off in track; 0 = off)")
     p.add_argument("--fuse-denoise", type=float, default=0.0, help="0 = deblur only; up to 1 = temporal denoise")
+    p.add_argument("--fuse-contrast", type=float, default=0.4, help="de-blur moving gate vs local contrast (0 = off)")
     p.add_argument("--no-gyro", action="store_true", help="ignore recorded gyro")
     p.add_argument("--cpu", action="store_true", help="don't use the GPU")
 
@@ -20,7 +21,7 @@ def add_shot_options(p: argparse.ArgumentParser) -> None:
 def option_args(o) -> list[str]:
     """Options -> command-line flags (everything but handles), for batch sub-processes."""
     out = ["--mode", o.mode, "--crop-budget", str(o.crop_budget), "--smoother", o.smoother,
-           "--fuse-denoise", str(o.fuse_denoise)]
+           "--fuse-denoise", str(o.fuse_denoise), "--fuse-contrast", str(o.fuse_contrast)]
     out += ["--zoom", str(o.zoom)] if o.zoom else []
     out += ["--fuse", str(o.fuse)] if o.fuse is not None else []
     out += ["--no-gyro"] if o.gyro == "off" else []
@@ -31,7 +32,7 @@ def option_args(o) -> list[str]:
 def options(a):
     from .pipeline import Options
     return Options(mode=a.mode, handles=a.handles, crop_budget=a.crop_budget, smoother=a.smoother, zoom=a.zoom,
-                   fuse=a.fuse, fuse_denoise=a.fuse_denoise, gyro="off" if a.no_gyro else "auto", gpu=not a.cpu)
+                   fuse=a.fuse, fuse_denoise=a.fuse_denoise, fuse_contrast=a.fuse_contrast, gyro="off" if a.no_gyro else "auto", gpu=not a.cpu)
 
 
 def review_cmd(a) -> int:

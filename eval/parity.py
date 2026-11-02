@@ -5,13 +5,14 @@ Prints per-shot max/median deviation of the correction (4K px), mode and zoom vs
 """
 import csv
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
 import numpy as np
 
-PROTO = Path("/Users/dean/src/personal/pit-stabilise/data")
+PROTO = Path(os.environ.get("GIGSTEADY_PROTO", "/Users/dean/src/personal/pit-stabilise/data"))
 
 
 def load(p: Path) -> np.ndarray:

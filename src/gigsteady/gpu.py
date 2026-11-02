@@ -25,6 +25,7 @@ LUMA = torch.tensor([0.2126, 0.7152, 0.0722], device=DEV).view(1, 3, 1, 1)
 SOBEL = torch.tensor([[[[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]], [[[-1, -2, -1], [0, 0, 0], [1, 2, 1]]]],
                      dtype=torch.float32, device=DEV)
 _kernels: dict = {}
+CONTRAST_FLOOR = 0.005  # ~5 10-bit codes: below this, local contrast is noise
 
 
 def gauss(x: torch.Tensor, sigma: float) -> torch.Tensor:
@@ -106,8 +107,9 @@ class Frame:
 
 
 class FuserGPU:
-    def __init__(self, radius=4, sharp=8.0, denoise=0.0, tau=0.06, min_gain=0.05):
+    def __init__(self, radius=4, sharp=8.0, denoise=0.0, tau=0.06, min_gain=0.05, contrast=0.4):
         self.radius, self.sharp, self.denoise, self.tau, self.min_gain = radius, sharp, denoise, tau, min_gain
+        self.contrast = contrast
         self.cache: "OrderedDict[int, Frame]" = OrderedDict()
         self.stats = {"frames": 0, "fused": 0, "pairs": 0}
 
@@ -144,8 +146,13 @@ class FuserGPU:
             Wf[:, 2] *= FW / AW
             warps.append(Wf)
         moving = torch.zeros_like(c.Y, dtype=torch.bool)
+        if self.contrast > 0:  # motion relative to local contrast: catches people moving behind haze (bright, flat)
+            C = smooth_half((c.Y - c.coarse) ** 2, 8).sqrt() + CONTRAST_FLOOR
         for a in aligned:
-            moving |= (a[:, 2:3] - c.coarse).abs() / L > self.tau
+            dc = (a[:, 2:3] - c.coarse).abs()
+            moving |= dc / L > self.tau
+            if self.contrast > 0:
+                moving |= dc / C > self.contrast
         moving = F.max_pool2d(moving.float(), 31, stride=1, padding=15) > 0
         weights = []
         for a in aligned:

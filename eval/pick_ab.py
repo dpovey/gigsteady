@@ -10,12 +10,13 @@ to check that "no real difference" is used when the paths are close. Prints the 
 import argparse
 import csv
 import json
+import os
 import random
 from pathlib import Path
 
 import numpy as np
 
-PROTO = Path("/Users/dean/src/personal/pit-stabilise/data/lockoff")
+PROTO = Path(os.environ.get("GIGSTEADY_PROTO", "/Users/dean/src/personal/pit-stabilise/data")) / "lockoff"
 
 
 def load(p: Path) -> np.ndarray:

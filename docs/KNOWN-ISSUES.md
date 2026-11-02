@@ -1,6 +1,6 @@
 # Known issues
 
-## De-blur ghosts moving people seen through haze (found 2026-11-03, shipped in good 4 u)
+## De-blur ghosts moving people seen through haze (found 2026-11-03, shipped in good 4 u; mitigated in 0.1.3)
 
 **What:** in lock mode with vibration de-blur, a moving person can be blended in from a neighbouring frame, leaving
 a faint doubled outline. Seen by Dean on good 4 u, SD_rec155859 (record 155860 on the Sydney final cut; drummer and
@@ -32,3 +32,20 @@ are fused. The similarity term (same `tau`, same `L`) is lenient for the same re
 3. Add a ghost check to the regression tests and to timeline QC: compare fused against `--fuse 0` in non-static
    areas and fail on edge doubling.
 4. Until then: on hazy shots with people moving, `--fuse 0` (lock-off without de-blur) avoids it.
+
+**Mitigation in 0.1.3:** a second moving-area test normalised by local contrast (`--fuse-contrast`, default 0.4;
+`gpu.py`/`fuse_cpu.py`). Measured with `eval/ghost_check.py` on SD_rec155859 (people box, de-blurred frames, 10-bit
+codes) and the SD_unstab_308139 burst (sharpness of frames 122-123, un-de-blurred 67/67):
+
+| fuse-contrast | ghost max | ghost mean | burst 122-123 |
+|---|---|---|---|
+| 0 (0.1.2 behaviour) | 10.3 | 2.3 | 86 / 88 |
+| 0.5 | 1.5 | 0.7 | 86 / 88 |
+| **0.4 (default)** | **1.3** | **0.5** | **86 / 88** |
+| 0.35 | 1.0 | 0.4 | 85 / 70 |
+| 0.25 | 0.65 | 0.2 | 70 / 67 |
+
+Both shots are regression tests (`tests/regress/test_reference_shots.py`). One knob can't separate the two cases
+fully: below 0.4 the burst repair goes. Still open: a per-pixel doubled-edge test (items 2 and 3 above), and checking
+whether the remaining ~1 code on frames 62-64/72-74 of SD_rec155859 is faint ghosting or legitimate repair of the
+drum kit inside the box.
