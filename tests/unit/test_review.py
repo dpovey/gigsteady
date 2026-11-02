@@ -53,3 +53,11 @@ def test_page_hides_names_and_unblind_maps_sides(tmp_path, monkeypatch):
     row = next(csv.DictReader(out.open()))
     assert row["picked"] == c["right"]["version"] and row["shot"] == c["name"]
     assert marks.read_text().startswith("clip,pref")  # export untouched
+
+
+def test_controls_show_original_on_both_sides():
+    shown = review.blind(items(10), random.Random(3), 2, shuffle_sides=False, controls=3)
+    ctl = [s for s in shown if s.get("control")]
+    assert len(shown) == 15 and len(ctl) == 3
+    for s in ctl:
+        assert s["panels"][0]["path"] == s["panels"][1]["path"] and s["panels"][0]["start"] == s["panels"][1]["start"]

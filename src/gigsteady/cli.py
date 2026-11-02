@@ -51,7 +51,8 @@ def review_cmd(a) -> int:
         sides = {v: Path(d) for v, d in (s.split("=", 1) for s in a.side)}
         shots = [s for s in json.loads(a.source.read_text()) if not a.only or s["name"] in a.only]
         items = review.ab_items(shots, sides)
-    print(review.build(a.kind, items, a.out, a.title, random.Random(seed), seed, a.repeats, crop, a.jobs))
+    print(review.build(a.kind, items, a.out, a.title, random.Random(seed), seed, a.repeats, crop, a.jobs,
+                       a.controls, a.note))
     return 0
 
 
@@ -83,6 +84,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--title", default="gigsteady review")
     p.add_argument("--repeats", type=int, default=3, help="clips shown twice, unannounced")
     p.add_argument("--seed", type=int)
+    p.add_argument("--controls", type=int, default=0, help="single: clips whose right side is the original, unannounced")
+    p.add_argument("--note", default="", help="extra HTML shown under the instructions")
     p.add_argument("--crop", help="x,y of the full-resolution crop (default: frame centre)")
     p.add_argument("--jobs", type=int, default=3)
     p = sub.add_parser("eval", help="independent checks: gyro-truth <clip> <start:n>...")

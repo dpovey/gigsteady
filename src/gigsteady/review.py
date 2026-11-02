@@ -138,11 +138,15 @@ def ab_items(shots: list[dict], sides: dict[str, Path]) -> list[dict]:
     return items
 
 
-def blind(items: list[dict], rng: random.Random, repeats: int, shuffle_sides: bool) -> list[dict]:
-    """Random order, neutral ids, a few unannounced repeats (spread out, sides drawn again)."""
+def blind(items: list[dict], rng: random.Random, repeats: int, shuffle_sides: bool, controls: int = 0) -> list[dict]:
+    """Random order, neutral ids, a few unannounced repeats (spread out, sides drawn again) and, for single pages,
+    a few unannounced controls whose right panel is the untouched original (does "stabilised" get a free pass?)."""
     shown = [dict(it) for it in items]
     for it in rng.sample(items, min(repeats, len(items))):
         shown.append(dict(it, repeat_of=it["name"]))
+    for it in rng.sample(items, min(controls, len(items))):
+        orig = dict(it["panels"][0])
+        shown.append(dict(it, control=True, panels=[orig, dict(orig, version="control: original")]))
     rng.shuffle(shown)
     # keep a repeat away from its first showing where possible
     for _ in range(50):
@@ -162,7 +166,7 @@ def blind(items: list[dict], rng: random.Random, repeats: int, shuffle_sides: bo
     return shown
 
 
-def page(title: str, kind: str, shown: list[dict], page_id: str) -> str:
+def page(title: str, kind: str, shown: list[dict], page_id: str, note: str = "") -> str:
     qs = Q_AB if kind == "ab" else Q_SINGLE
     instr = INSTR_AB if kind == "ab" else INSTR_SINGLE
     labels = ("A", "B") if kind == "ab" else ("original", "stabilised")
@@ -195,7 +199,7 @@ button.on{{background:#3d5afe;border-color:#3d5afe;color:#fff}}
 .note{{margin-top:8px;background:#1b1b1b;color:#ddd;border:1px solid #444;border-radius:4px;padding:4px;width:50%}}
 </style></head><body>
 <h1>{html.escape(title)} ({len(shown)} clips)</h1>
-<div class="instr">{instr}
+<div class="instr">{instr}{note}
 <p>Keys: <code>space</code> play/pause the clip in view, <code>s</code> half speed. Your marks stay in this browser;
 press Export when you're done (you can export more than once).</p></div>
 <div class="top"><span id="count"></span><button id="export">Export marks (CSV)</button></div>
@@ -235,21 +239,21 @@ count();
 
 
 def build(kind: str, items: list[dict], out: Path, title: str, rng: random.Random, seed: int, repeats: int = 3,
-          crop: tuple[int, int] | None = None, jobs: int = 3) -> Path:
+          crop: tuple[int, int] | None = None, jobs: int = 3, controls: int = 0, note: str = "") -> Path:
     out.mkdir(parents=True, exist_ok=True)
     (out / "clips").mkdir(exist_ok=True)
-    shown = blind(items, rng, repeats, shuffle_sides=(kind == "ab"))
+    shown = blind(items, rng, repeats, shuffle_sides=(kind == "ab"), controls=controls)
     with ThreadPoolExecutor(jobs) as pool:
         list(pool.map(lambda it: make_clip([(p["path"], p["start"]) for p in it["panels"]], it["n"],
                                            out / "clips" / f"{it['id']}.mp4", crop), shown))
     page_id = f"{out.name}-{seed}"
     instr = INSTR_AB if kind == "ab" else INSTR_SINGLE
     key = {"page_id": page_id, "kind": kind, "title": title, "seed": seed, "built": dt.datetime.now().isoformat(),
-           "crop": crop, "questions": Q_AB if kind == "ab" else Q_SINGLE, "instructions": instr,
-           "clips": [{"id": it["id"], "name": it["name"], "n": it["n"], "repeat_of": it.get("repeat_of"),
+           "crop": crop, "note": note, "questions": Q_AB if kind == "ab" else Q_SINGLE, "instructions": instr,
+           "clips": [{"id": it["id"], "name": it["name"], "n": it["n"], "repeat_of": it.get("repeat_of"), "control": it.get("control", False),
                       "left": it["panels"][0], "right": it["panels"][1]} for it in shown]}
     (out / "key.json").write_text(json.dumps(key, indent=1))
-    (out / "index.html").write_text(page(title, kind, shown, page_id))
+    (out / "index.html").write_text(page(title, kind, shown, page_id, note))
     return out / "index.html"
 
 
@@ -262,12 +266,12 @@ def unblind(review: Path, marks: Path) -> Path:
     qs = list(key["questions"])
     with out.open("w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["clip", "shot", "repeat_of", "left", "right", *qs, "picked", "note", "marked_at"])
+        w.writerow(["clip", "shot", "repeat_of", "control", "left", "right", *qs, "picked", "note", "marked_at"])
         for r in rows:
             c = clips[r["clip"]]
             left, right = c["left"]["version"], c["right"]["version"]
             pref = r.get("pref", "")
             picked = {"A": left, "B": right}.get(pref[:1], pref) if key["kind"] == "ab" else ""
-            w.writerow([r["clip"], c["name"], c["repeat_of"] or "", left, right, *(r.get(q, "") for q in qs),
+            w.writerow([r["clip"], c["name"], c["repeat_of"] or "", int(c.get("control", False)), left, right, *(r.get(q, "") for q in qs),
                         picked, r.get("note", ""), r.get("marked_at", "")])
     return out
