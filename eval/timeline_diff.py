@@ -79,7 +79,9 @@ def main() -> None:
     ap.add_argument("--out", type=Path)
     ap.add_argument("--step", type=int, default=2, help="register every Nth frame")
     a = ap.parse_args()
-    items = [i for i in json.loads(a.items.read_text())["items"] if i["track"] == 1]
+    all_items = json.loads(a.items.read_text())["items"]
+    items = [i for i in all_items if i["track"] == 1]
+    overlays = [(i["start"], i["end"]) for i in all_items if i["track"] > 1 and i["type"] not in (None,)]
     man = {m["name"]: m for m in json.loads((a.job / "manifest.json").read_text())}
     st = json.loads((a.job / "place_state.json").read_text())
     placed = {p["name"]: p for p in st["placed"]}
@@ -97,7 +99,9 @@ def main() -> None:
         k, n = lo - a.range_start, hi - lo
         M, S = decode(a.master, k, n), decode(a.stab, k, n)
         n = min(len(M), len(S))
-        row = {"cut": name, "angle": ang, "rec_start": lo, "frames": n, "placed": name in placed}
+        row = {"cut": name, "angle": ang, "rec_start": lo, "frames": n, "placed": name in placed,
+               # titles composited over a moved background differ at their edges; that's expected
+               "under_title_frames": sum(max(0, min(hi, e) - max(lo, b)) for b, e in overlays)}
         if name not in placed:
             d = np.abs(M[:n].astype(np.int16) - S[:n].astype(np.int16))
             row.update(mean_abs=round(float(d.mean()), 3), max_abs=int(d.max()),
