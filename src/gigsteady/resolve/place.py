@@ -260,7 +260,7 @@ def replace_media(resolve, job: Path, new_outputs: Path, log=print) -> dict:
     p.SetCurrentTimeline(dup)
     check(p.GetCurrentTimeline().GetUniqueId() == dup.GetUniqueId(), "could not open the duplicate")
     try:
-        want = {x["item"]: x["name"] for x in st["placed"]}
+        want = {x["item"]: x["name"] for x in st["placed"] + st.get("placed_by_editor", [])}
         items = {it.GetUniqueId(): it for it in (dup.GetItemListInTrack("video", 2) or []) if it.GetUniqueId() in want}
         check(len(items) == len(want), f"found {len(items)} of {len(want)} placed items")
         before = {i: item_state(it) for i, it in items.items()}
