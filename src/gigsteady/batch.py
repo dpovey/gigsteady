@@ -53,7 +53,8 @@ def run_batch(shots_file: Path, job: Path, opt: Options, jobs: int = 3, render: 
         row = {"name": s["name"], "src": s["src"], "in": s["in"], "out": s["out"]}
         if rep_path.exists() and (out.exists() or not render):
             rep = json.loads(rep_path.read_text())
-            if rep.get("options_key") == key and (rep.get("output") is not None) == render:
+            same_shot = (rep.get("src"), rep.get("in"), rep.get("out")) == (s["src"], s["in"], s["out"])
+            if same_shot and rep.get("options_key") == key and (rep.get("output") is not None) == render:
                 return {**row, **summary(rep), "status": "skipped"}
         for stale in (out.with_name(out.stem + ".partial.mov"), out if render else None, rep_path):
             if stale and stale.exists():

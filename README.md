@@ -17,7 +17,7 @@ Status: working and used on a real edit, but young. See [docs/KNOWN-ISSUES.md](d
 - **Track mode** (moving cameras): measures frame-to-frame motion and plans a smooth camera path with an L1 planner
   (Grundmann et al. 2011) inside a crop budget (default 1.10). Auto mode switches to track when the camera clearly
   moved or the shot won't register.
-- **Gyro + IBIS fusion** for Sony files with `rtmd` metadata (FX3/FX30/A7 bodies), via a small Rust tool built on
+- **Gyro + IBIS fusion** for Sony files with `rtmd` metadata (tested on FX3 and FX30), via a small Rust tool built on
   [telemetry-parser](https://github.com/AdrianEddy/telemetry-parser) that reads a time range without loading the
   whole file.
 - **Vibration de-blur** (lock mode): each frame borrows detail from crisper neighbours, aligned, in static areas only.
@@ -52,9 +52,11 @@ The `scripts/resolve_*.py` tools run with the system Python against a running Re
 Local). They read the timeline (`resolve_items.py`, `resolve_export_fcpxml.py`), turn multicam cuts into source
 shots through an FCPXML export (`shots_from_fcpxml.py`), and place finished results on a *duplicate* of the
 timeline (`resolve_place.py`): one change at a time, each read back, grades copied with `CopyGrades`, transforms
-composed, and an undo that removes only what it created. `eval/timeline_diff.py` then compares renders of the two
+composed, and an undo that removes only what it created (it refuses if the duplicate was renamed or adopted, since
+another timeline may then be playing its media). `eval/timeline_diff.py` then compares renders of the two
 timelines cut by cut. Resolve API behaviours found along the way are noted in the code (for example: track enable
-reads `False` on a timeline that isn't current, and a flag on a multicam cut lands on the shared multicam clip).
+reads `False` on a timeline that isn't current, and a flag on a multicam cut lands on the shared multicam clip, so
+`resolve_mark_cuts.py` marks cuts with timeline markers instead).
 
 An OpenFX plugin front end is being explored: [docs/OFX-EXPLORATION.md](docs/OFX-EXPLORATION.md).
 

@@ -71,17 +71,28 @@ def read_rgb48(path: str, start: int, n: int, prefetch: int = 4) -> Iterator[np.
     conv = ["-pix_fmt", "yuv422p10le"] if exact else ["-vf", rgb_in_filter(clip)]
     dec = subprocess.Popen([*_input(clip, start, n), *conv, "-f", "rawvideo", "-"], stdout=subprocess.PIPE)
     q: queue.Queue = queue.Queue(maxsize=prefetch)
+    stop = threading.Event()
+
+    def put(item) -> bool:  # gives up when the consumer has gone, so the thread never blocks forever
+        while not stop.is_set():
+            try:
+                q.put(item, timeout=0.5)
+                return True
+            except queue.Full:
+                pass
+        return False
 
     def reader():
         try:
             for j in range(n):
                 b = dec.stdout.read(size)
                 if len(b) < size:
-                    q.put(RuntimeError(f"decoder ended at frame {j} of {n} ({path} @ {start})"))
+                    put(RuntimeError(f"decoder ended at frame {j} of {n} ({path} @ {start})"))
                     return
-                q.put(yuv422p10_to_rgb48(b, clip.width, clip.height, clip.color_range == "pc") if exact
-                      else np.frombuffer(b, np.uint16).reshape(clip.height, clip.width, 3))
-            q.put(None)
+                if not put(yuv422p10_to_rgb48(b, clip.width, clip.height, clip.color_range == "pc") if exact
+                           else np.frombuffer(b, np.uint16).reshape(clip.height, clip.width, 3)):
+                    return
+            put(None)
         finally:
             dec.stdout.close()
 
@@ -92,6 +103,7 @@ def read_rgb48(path: str, start: int, n: int, prefetch: int = 4) -> Iterator[np.
                 raise f
             yield f
     finally:
+        stop.set()
         dec.kill() if dec.poll() is None else None
         dec.wait()
 
@@ -114,7 +126,7 @@ class ProResWriter:
             stdin=subprocess.PIPE)
         self.q: queue.Queue = queue.Queue(maxsize=prefetch)
         self.err: Exception | None = None
-        self.t = threading.Thread(target=self._run)
+        self.t = threading.Thread(target=self._run, daemon=True)
         self.t.start()
         self.count = 0
 
@@ -134,7 +146,10 @@ class ProResWriter:
     def close(self) -> None:
         self.q.put(None)
         self.t.join()
-        self.proc.stdin.close()
+        try:
+            self.proc.stdin.close()
+        except BrokenPipeError as e:  # encoder already died: keep its return code
+            self.err = self.err or e
         rc = self.proc.wait()
         if self.err or rc != 0:
             raise RuntimeError(f"encoder failed (rc={rc}): {self.err}")

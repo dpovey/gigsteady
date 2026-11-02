@@ -41,7 +41,7 @@ for name, s in shots.items():
         row["status"] = f"frame count {frames} != handles + shot {r['handle_in'] + n + r['handle_out']}"
     rows.append(row)
 (job / "manifest.json").write_text(json.dumps(rows, indent=1))
-keys = list(next(r for r in rows if r["status"] != "missing") or rows[0])
+keys = list(next((r for r in rows if r["status"] != "missing"), rows[0]))
 with (job / "manifest.csv").open("w", newline="") as f:
     w = csv.DictWriter(f, fieldnames=keys, extrasaction="ignore")
     w.writeheader()

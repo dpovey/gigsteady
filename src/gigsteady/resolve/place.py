@@ -60,7 +60,11 @@ class Placer:
         self.mp = self.p.GetMediaPool()
         self.master_name, self.dup_name = master_name, dup_name
         self.state_p = self.job / "place_state.json"
-        self.state = json.loads(self.state_p.read_text()) if self.state_p.exists() else {
+        if self.state_p.exists():
+            old = json.loads(self.state_p.read_text())
+            check("undone" in old, f"{self.state_p} records a placement that hasn't been undone; refusing to place again")
+            self.state_p.rename(self.state_p.with_name(f"place_state.undone-{old['undone'][:19].replace(':', '')}.json"))
+        self.state = {
             "project": self.p.GetName(), "master": master_name, "duplicate": dup_name, "created": {}, "placed": [],
             "skipped": [], "started": dt.datetime.now().isoformat()}
 
@@ -109,11 +113,11 @@ class Placer:
         for t in range(n, 1, -1):
             items = dup.GetItemListInTrack("video", t) or []
             want = [(it.GetStart(), it.GetEnd(), it.GetName()) for it in items]
+            check(not tracks[t]["locked"], f"track {t} is locked")
             if items:
                 dup.MoveItems(items, {"trackIndex": t + 1}, False)
             got = [(it.GetStart(), it.GetEnd(), it.GetName()) for it in (dup.GetItemListInTrack("video", t + 1) or [])]
             check(got == want and not (dup.GetItemListInTrack("video", t) or []), f"moving track {t} -> {t + 1}")
-            check(not tracks[t]["locked"], f"track {t} is locked")
             dup.SetTrackEnable("video", t + 1, tracks[t]["enabled"])
             check(dup.GetIsTrackEnabled("video", t + 1) == tracks[t]["enabled"], f"track {t + 1} enable")
             dup.SetTrackName("video", t + 1, tracks[t]["name"])
@@ -225,14 +229,16 @@ def undo(resolve, job: Path, log=print) -> None:
     check(p.GetName() == st["project"], "different project open")
     check(not p.IsRenderingInProgress(), "a render is in progress")
     mp = p.GetMediaPool()
-    tl = find_timeline(p, st["duplicate"])
-    if tl is not None:
-        check(tl.GetUniqueId() == st["created"].get("timeline"), "duplicate's id differs from the one created")
-        if p.GetCurrentTimeline().GetUniqueId() == tl.GetUniqueId():
-            p.SetCurrentTimeline(find_timeline(p, st["master"]))
-        mp.DeleteTimelines([tl])
-        check(find_timeline(p, st["duplicate"]) is None, "duplicate still there")
-        log("deleted timeline", st["duplicate"])
+    tl = find_timeline_by_id(p, st["created"].get("timeline", ""))
+    check(tl is not None, "the duplicate timeline gigsteady created is gone; refusing to delete its media "
+                          "(another timeline may be playing it)")
+    check(tl.GetName() == st["duplicate"], f"the duplicate was renamed to {tl.GetName()!r}; refusing (it may be in "
+                                           "use). Rename it back to undo.")
+    if p.GetCurrentTimeline().GetUniqueId() == tl.GetUniqueId():
+        p.SetCurrentTimeline(find_timeline(p, st["master"]))
+    mp.DeleteTimelines([tl])
+    check(find_timeline_by_id(p, st["created"]["timeline"]) is None, "duplicate still there")
+    log("deleted timeline", st["duplicate"])
     root = mp.GetRootFolder()
     for f in root.GetSubFolderList():
         if f.GetUniqueId() == st["created"].get("bin"):

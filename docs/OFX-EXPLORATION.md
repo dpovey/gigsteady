@@ -104,7 +104,7 @@ stated in the task); check which.
   but I did not read the source [unconfirmed]. The README says applying it on the Edit or Color page runs faster than
   in Fusion. [web]
 - Licence: GPL-3.0 (older repo); GPLv3 with an App Store exception (plugins repo). Fine for reading and ideas; do not
-  copy code into a non-GPL project. gigsteady is private so a GPL derivative would only matter on distribution.
+  copy code into a non-GPL project. gigsteady is MIT-licensed and public, so read Gyroflow's plugin for ideas but don't copy its code.
 - Open issues: 43 on the plugins repo; I did not read them. Reading them for Resolve multicam, caching and
   retime reports is a cheap next step.
 

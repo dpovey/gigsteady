@@ -126,9 +126,15 @@ def render(src: str, start: int, n: int, A: np.ndarray, out: Path, fuser=None, g
                 o = fuser.output(t)
                 w.write(G.download(o) if gpu else o)
                 fuser.drop_before(t - radius + 1)
-    finally:
+    except BaseException:
         frames.close()
-        w.close()
+        try:
+            w.close()
+        except Exception:  # keep the original error, not the encoder's complaint about a short stream
+            pass
+        raise
+    frames.close()
+    w.close()
     if w.count != n:
         raise RuntimeError(f"wrote {w.count} frames, expected {n}")
 

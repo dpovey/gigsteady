@@ -12,8 +12,23 @@ MODULES = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Develo
 LIB = "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
 
 
+_exit_code = [0]
+
+
 def guard() -> None:
-    atexit.register(lambda: (sys.stdout.flush(), sys.stderr.flush(), os._exit(0)))
+    """Exit through os._exit (Resolve's library can hang a normal exit) but keep the script's exit status."""
+    orig_exit, orig_hook = sys.exit, sys.excepthook
+
+    def _exit(code=0):
+        _exit_code[0] = code if isinstance(code, int) else (0 if code is None else 1)
+        orig_exit(code)
+
+    def _hook(*a):
+        _exit_code[0] = 1
+        orig_hook(*a)
+
+    sys.exit, sys.excepthook = _exit, _hook
+    atexit.register(lambda: (sys.stdout.flush(), sys.stderr.flush(), os._exit(_exit_code[0])))
 
 
 def connect(injected=None):

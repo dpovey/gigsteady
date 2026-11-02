@@ -8,7 +8,7 @@ from pathlib import Path
 def add_shot_options(p: argparse.ArgumentParser) -> None:
     p.add_argument("--handles", type=int, default=25, help="extra frames each side (clamped at the file ends)")
     p.add_argument("--mode", choices=["auto", "lock", "track"], default="auto")
-    p.add_argument("--crop-budget", type=float, default=1.10, help="track mode: max crop (0 = no limit)")
+    p.add_argument("--crop-budget", type=float, default=1.10, help="track mode: max crop (0 = no limit; uses the gauss smoother)")
     p.add_argument("--smoother", choices=["l1", "gauss"], default="l1")
     p.add_argument("--zoom", type=float, help="force the output zoom")
     p.add_argument("--fuse", type=int, help="vibration de-blur radius (default: 4 in lock mode, off in track; 0 = off)")
