@@ -15,6 +15,7 @@ from collections.abc import Iterator
 
 import numpy as np
 
+from .colour import rgb48_to_yuv422p10, yuv422p10_to_rgb48
 from .probe import Clip, frames_to_tc, probe, tc_to_frames
 
 
@@ -63,9 +64,12 @@ def read_rgb48(path: str, start: int, n: int, prefetch: int = 4) -> Iterator[np.
     """Frames [start, start+n) as (H, W, 3) uint16 RGB at full size, decoded on a background thread.
     Raises if the decoder delivers fewer than n frames."""
     clip = probe(path)
-    size = clip.width * clip.height * 6
-    dec = subprocess.Popen([*_input(clip, start, n), "-vf", rgb_in_filter(clip), "-f", "rawvideo", "-"],
-                           stdout=subprocess.PIPE)
+    # 10-bit 4:2:2 BT.709 (the Canon/Sony cameras): take the planes as they are and convert exactly here;
+    # anything else goes through ffmpeg's converter with the matrix and range stated
+    exact = clip.pix_fmt == "yuv422p10le" and (clip.color_space or "bt709") == "bt709"
+    size = clip.width * clip.height * (4 if exact else 6)
+    conv = ["-pix_fmt", "yuv422p10le"] if exact else ["-vf", rgb_in_filter(clip)]
+    dec = subprocess.Popen([*_input(clip, start, n), *conv, "-f", "rawvideo", "-"], stdout=subprocess.PIPE)
     q: queue.Queue = queue.Queue(maxsize=prefetch)
 
     def reader():
@@ -75,7 +79,8 @@ def read_rgb48(path: str, start: int, n: int, prefetch: int = 4) -> Iterator[np.
                 if len(b) < size:
                     q.put(RuntimeError(f"decoder ended at frame {j} of {n} ({path} @ {start})"))
                     return
-                q.put(np.frombuffer(b, np.uint16).reshape(clip.height, clip.width, 3))
+                q.put(yuv422p10_to_rgb48(b, clip.width, clip.height, clip.color_range == "pc") if exact
+                      else np.frombuffer(b, np.uint16).reshape(clip.height, clip.width, 3))
             q.put(None)
         finally:
             dec.stdout.close()
@@ -92,7 +97,8 @@ def read_rgb48(path: str, start: int, n: int, prefetch: int = 4) -> Iterator[np.
 
 
 class ProResWriter:
-    """ProRes 422 HQ (VideoToolbox), 10-bit 4:2:2 BT.709 video range (tagged), fed 16-bit RGB on a background thread.
+    """ProRes 422 HQ (VideoToolbox), 10-bit 4:2:2 BT.709 video range (tagged), fed 16-bit RGB on a background thread;
+    the RGB -> Y'CbCr conversion is done exactly in gigsteady.colour, ffmpeg only repacks and encodes.
     Writes to `out` directly; callers write to a .partial name and rename on success."""
 
     def __init__(self, out: str, width: int, height: int, fps, timecode: str | None = None, prefetch: int = 4,
@@ -101,9 +107,9 @@ class ProResWriter:
         tc = ["-timecode", timecode] if timecode else []
         prof = ["-profile:v", "hq"] if encoder == "prores_videotoolbox" else ["-profile:v", "3"]
         self.proc = subprocess.Popen(
-            ["ffmpeg", "-nostdin", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb48le", "-s", f"{width}x{height}",
-             "-r", fps_s, "-i", "-", "-vf", "scale=out_color_matrix=bt709:out_range=tv,format="
-             + ("p210le" if encoder == "prores_videotoolbox" else "yuv422p10le"), "-c:v", encoder, *prof,
+            ["ffmpeg", "-nostdin", "-v", "error", "-f", "rawvideo", "-pix_fmt", "yuv422p10le", "-s", f"{width}x{height}",
+             "-r", fps_s, "-colorspace", "bt709", "-color_range", "tv", "-i", "-",
+             "-pix_fmt", "p210le" if encoder == "prores_videotoolbox" else "yuv422p10le", "-c:v", encoder, *prof,
              "-colorspace", "bt709", "-color_range", "tv", *tc, "-y", out],
             stdin=subprocess.PIPE)
         self.q: queue.Queue = queue.Queue(maxsize=prefetch)
@@ -115,7 +121,7 @@ class ProResWriter:
     def _run(self):
         while (f := self.q.get()) is not None:
             try:
-                self.proc.stdin.write(np.ascontiguousarray(f, np.uint16).tobytes())
+                self.proc.stdin.write(rgb48_to_yuv422p10(f))  # exact BT.709 video range (gigsteady.colour)
             except Exception as e:  # keep draining so put() never blocks forever
                 self.err = e
 
