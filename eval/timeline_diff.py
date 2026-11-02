@@ -78,13 +78,15 @@ def main() -> None:
     ap.add_argument("job", type=Path)
     ap.add_argument("--out", type=Path)
     ap.add_argument("--step", type=int, default=2, help="register every Nth frame")
+    ap.add_argument("--unchanged", nargs="*", default=[],
+                    help="placed cuts whose overlay is disabled: must match master exactly")
     a = ap.parse_args()
     all_items = json.loads(a.items.read_text())["items"]
     items = [i for i in all_items if i["track"] == 1]
     overlays = [(i["start"], i["end"]) for i in all_items if i["track"] > 1 and i["type"] not in (None,)]
     man = {m["name"]: m for m in json.loads((a.job / "manifest.json").read_text())}
     st = json.loads((a.job / "place_state.json").read_text())
-    placed = {p["name"]: p for p in st["placed"]}
+    placed = {p["name"]: p for p in st["placed"] if p["name"] not in a.unchanged}
     n_total = int(subprocess.run(["ffprobe", "-v", "error", "-count_packets", "-select_streams", "v:0", "-show_entries",
                                   "stream=nb_read_packets", "-of", "csv=p=0", a.stab],
                                  capture_output=True, text=True, check=True).stdout.split()[0])

@@ -239,7 +239,7 @@ def undo(resolve, job: Path, log=print) -> None:
 def item_state(it) -> dict:
     g = it.GetNodeGraph()
     n = g.GetNumNodes() if g else 0
-    return {"start": it.GetStart(), "end": it.GetEnd(), "left": it.GetLeftOffset(),
+    return {"start": it.GetStart(), "end": it.GetEnd(), "left": it.GetLeftOffset(), "enabled": it.GetClipEnabled(),
             "nodes": n, "luts": [g.GetLUT(i) for i in range(1, n + 1)] if g else [],
             **{k: it.GetProperty(k) for k in ("ZoomX", "ZoomY", "RotationAngle", "Pan", "Tilt")}}
 
