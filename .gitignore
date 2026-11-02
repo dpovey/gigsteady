@@ -7,3 +7,4 @@ rust/*/target/
 *.mp4
 .pytest_cache/
 rust/*/target/
+work/
