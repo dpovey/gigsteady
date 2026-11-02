@@ -234,3 +234,69 @@ def undo(resolve, job: Path, log=print) -> None:
             log("deleted bin", f.GetName(), "and", len(clips), "clips")
     st["undone"] = dt.datetime.now().isoformat()
     st_p.write_text(json.dumps(st, indent=1))
+
+
+def item_state(it) -> dict:
+    g = it.GetNodeGraph()
+    n = g.GetNumNodes() if g else 0
+    return {"start": it.GetStart(), "end": it.GetEnd(), "left": it.GetLeftOffset(),
+            "nodes": n, "luts": [g.GetLUT(i) for i in range(1, n + 1)] if g else [],
+            **{k: it.GetProperty(k) for k in ("ZoomX", "ZoomY", "RotationAngle", "Pan", "Tilt")}}
+
+
+def replace_media(resolve, job: Path, new_outputs: Path, log=print) -> dict:
+    """Point the media pool clips place() imported at re-rendered files (same names in new_outputs), keeping the
+    timeline items. Reads every placed item's position, grade and transform before and after, on the duplicate
+    while it is current, then restores the saved view. Stops on the first mismatch."""
+    st_p = Path(job) / "place_state.json"
+    st = json.loads(st_p.read_text())
+    p = resolve.GetProjectManager().GetCurrentProject()
+    check(p.GetName() == st["project"], "different project open")
+    check(not p.IsRenderingInProgress(), "a render is in progress")
+    cur = p.GetCurrentTimeline()
+    view = {"timeline": cur.GetName(), "playhead": cur.GetCurrentTimecode(), "inout": cur.GetMarkInOut()}
+    dup = find_timeline(p, st["duplicate"])
+    check(dup is not None and dup.GetUniqueId() == st["created"]["timeline"], "duplicate not found")
+    p.SetCurrentTimeline(dup)
+    check(p.GetCurrentTimeline().GetUniqueId() == dup.GetUniqueId(), "could not open the duplicate")
+    try:
+        want = {x["item"]: x["name"] for x in st["placed"]}
+        items = {it.GetUniqueId(): it for it in (dup.GetItemListInTrack("video", 2) or []) if it.GetUniqueId() in want}
+        check(len(items) == len(want), f"found {len(items)} of {len(want)} placed items")
+        before = {i: item_state(it) for i, it in items.items()}
+        folder = next(f for f in p.GetMediaPool().GetRootFolder().GetSubFolderList()
+                      if f.GetUniqueId() == st["created"]["bin"])
+        ids = set(st["created"]["media"])
+        swapped = []
+        for c in folder.GetClipList():
+            if c.GetUniqueId() not in ids:
+                continue
+            old = c.GetClipProperty("File Path")
+            new = str(Path(new_outputs) / Path(old).name)
+            check(Path(new).exists(), f"missing {new}")
+            if old == new:
+                continue
+            ok = c.ReplaceClip(new)
+            check(c.GetClipProperty("File Path") == new, f"{Path(old).name}: File Path {c.GetClipProperty('File Path')}"
+                  f" after ReplaceClip (returned {ok})")
+            swapped.append({"clip": c.GetUniqueId(), "from": old, "to": new})
+            log("replaced", Path(old).name, "->", new)
+        after = {i: item_state(it) for i, it in items.items()}
+        for i in items:
+            check(before[i] == after[i], f"{want[i]}: item changed {before[i]} -> {after[i]}")
+        st.setdefault("replaced", []).append({"at": dt.datetime.now().isoformat(), "to": str(new_outputs),
+                                              "clips": swapped})
+        st_p.write_text(json.dumps(st, indent=1))
+        log(f"{len(swapped)} clips replaced; {len(items)} placed items unchanged (position, grade, transform)")
+        return st
+    finally:
+        tl = find_timeline(p, view["timeline"])
+        p.SetCurrentTimeline(tl)
+        io = view["inout"].get("video", {})
+        if "in" in io and "out" in io:
+            tl.SetMarkInOut(io["in"], io["out"])
+        tl.SetCurrentTimecode(view["playhead"])
+        check(p.GetCurrentTimeline().GetName() == view["timeline"], "restore: timeline")
+        check(tl.GetCurrentTimecode() == view["playhead"], "restore: playhead")
+        check(tl.GetMarkInOut().get("video", {}) == io, "restore: In/Out")
+        log("restored", view["timeline"], view["playhead"], io)

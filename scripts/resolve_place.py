@@ -1,6 +1,7 @@
 """Place a finished job on a duplicate of a timeline (see gigsteady.resolve.place), or undo it.
 Usage: /usr/bin/python3 scripts/resolve_place.py <job_dir> "<master timeline>" "<duplicate name>"
        /usr/bin/python3 scripts/resolve_place.py <job_dir> --undo
+       /usr/bin/python3 scripts/resolve_place.py <job_dir> --replace <new outputs dir>   (re-rendered media, same names)
 The job needs manifest.json (scripts/manifest.py) and shots.json (angle transforms)."""
 import json
 import sys
@@ -17,6 +18,10 @@ r = connect()
 if sys.argv[2] == "--undo":
     place.undo(r, job)
     print("UNDO DONE")
+    sys.exit(0)
+if sys.argv[2] == "--replace":
+    place.replace_media(r, job, Path(sys.argv[3]), log=lambda *a: print(*a, flush=True))
+    print("REPLACE DONE")
     sys.exit(0)
 shots = {s["name"]: s for s in json.loads((job / "shots.json").read_text())}
 manifest = [dict(shots[m["name"]], **m) for m in json.loads((job / "manifest.json").read_text())]
