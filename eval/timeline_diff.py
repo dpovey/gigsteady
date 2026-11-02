@@ -87,7 +87,7 @@ def main() -> None:
     placed = {p["name"]: p for p in st["placed"]}
     n_total = int(subprocess.run(["ffprobe", "-v", "error", "-count_packets", "-select_streams", "v:0", "-show_entries",
                                   "stream=nb_read_packets", "-of", "csv=p=0", a.stab],
-                                 capture_output=True, text=True, check=True).stdout)
+                                 capture_output=True, text=True, check=True).stdout.split()[0])
     rows = []
     for it in items:
         lo, hi = max(it["start"], a.range_start), min(it["end"], a.range_start + n_total)
