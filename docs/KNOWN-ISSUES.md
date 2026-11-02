@@ -11,6 +11,14 @@ Place (graded), drummer region at 1:1, record frame 155860 (source 3O1A7144.MP4 
 = original | output | same shot re-rendered with `--fuse 0`: the doubling is gone with de-blur off, so de-blur causes it.
 That shot fused 56 of 155 frames.
 
+**Dean's marks (2026-11-03):** ghost visible at 01:43:54:10 and :11 (strong) and :16, :17, :18 (faint). De-blur
+blended exactly the run :10 to :18 (output frames 26-34; fused vs `--fuse 0` differs on those 9 and is identical
+elsewhere, `work/artefact_155859/ghost_metric.csv`). The unmarked :12 to :15 change about as much (mean |d| 1.6-2.6 vs
+1.4-2.7 10-bit codes in the drummer/singer region) and still-frame crops show doubling there too
+(`fused_2468.png`: :11 | :13 | :15 | :17), so the whole fused run is affected and the marks record what reads at
+playback speed. A ghost check therefore can't be "how much did fusion change the frame"; it has to detect doubled
+edges (structure in the fused frame that lines up with the neighbour's position, not the current frame's).
+
 **Cause:** the moving-area gate (`src/gigsteady/gpu.py:146-149`, same logic in `fuse_cpu.py`) flags a pixel as
 moving when the coarse (sigma 8, half-res) difference to a neighbour exceeds `tau` (0.06) of the local *mean*
 luminance `L`. Haze raises `L` and lowers the contrast of people behind it, so their motion stays under 6% and they
