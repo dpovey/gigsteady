@@ -27,7 +27,8 @@ W, H = 960, 540
 def decode(path: str, start: int, n: int) -> np.ndarray:
     ss = ["-ss", f"{(start - 0.25) / 25:.6f}"] if start > 0 else []
     raw = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", *ss, "-i", path, "-frames:v", str(n),
-                          "-vf", f"scale={W}:{H}:flags=area", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"],
+                          # to RGB at full size first: resizing in YUV before the conversion biases RGB by ~2 codes
+                          "-vf", f"format=gbrp16le,scale={W}:{H}:flags=area,format=rgb24", "-f", "rawvideo", "-"],
                          capture_output=True, check=True).stdout
     return np.frombuffer(raw, np.uint8).reshape(-1, H, W, 3)
 
