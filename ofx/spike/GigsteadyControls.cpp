@@ -8,8 +8,8 @@
 
 #include "ofxsImageEffect.h"
 
-#define kName "gigsteady"
-#define kGrouping "gigsteady"
+#define kName "Gig-steady"
+#define kGrouping "Gig-steady"
 #define kIdentifier "com.dpovey.gigsteady"
 
 namespace {

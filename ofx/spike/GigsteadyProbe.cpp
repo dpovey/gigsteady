@@ -18,7 +18,7 @@
 #include "ofxsMultiThread.h"
 
 #define kPluginName "gigsteady probe"
-#define kPluginGrouping "gigsteady"
+#define kPluginGrouping "Gig-steady"
 #define kPluginIdentifier "com.dpovey.gigsteady.probe"
 
 static std::mutex gLogMutex;
