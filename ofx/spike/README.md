@@ -38,5 +38,5 @@ shot's sidecar (both the lock and the track path), so changing them never needs 
 three hardcoded clips (a plain clip, a trimmed clip, a multicam cut), applies the probe to each with
 `TimelineItem.AddEffect("ofx", ...)` and steps the playhead so the viewer renders them. It never starts a render; a
 Deliver render is done by hand or with the editor's render tool. `cleanup` deletes the test timeline.
-`summarise_log.py` turns the log into a table per source file. Each fetch is logged with a pixel signature (`sig`),
+`run_order_test.py build / measure / cleanup` checks whether the grade and clip zoom come after the effect (frame exports, no render). `summarise_log.py` turns the log into a table per source file. Each fetch is logged with a pixel signature (`sig`),
 so a fetch that returned a clamped edge frame instead of the real neighbour shows up as a repeated signature.
