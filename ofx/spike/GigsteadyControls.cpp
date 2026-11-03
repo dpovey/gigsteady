@@ -17,7 +17,9 @@
 #include <memory>
 #include <string>
 
+#include "ProgressPanel.h"
 #include "ofxsImageEffect.h"
+#include "ofxsSupportPrivate.h"
 
 #define kName "Gig-steady"
 #define kGrouping "Gig-steady"
@@ -157,14 +159,24 @@ private:
         const char* from = "source";
         if (dst.max > dst.min && dst.max - dst.min < t1 - t0) t0 = dst.min, t1 = dst.max, from = "output";
         if (ir1 > ir0 && ir1 - ir0 < t1 - t0) t0 = ir0, t1 = ir1, from = "instance";
-        if (t1 - t0 > 1000) t0 = std::max(src.min, now - 125), t1 = std::min(src.max, now + 125), from = "playhead";
+        // 751 frames: long enough (~10 s) to see the progress window
+        if (t1 - t0 > 1000) t0 = std::max(src.min, now - 375), t1 = std::min(src.max, now + 375), from = "playhead";
 
         const int n = static_cast<int>(t1 - t0) + 1;
         std::string lines;
         int fetched = 0, failed = 0, threw = 0;
         bool cancelled = false;
         auto start = std::chrono::steady_clock::now();
-        progressStart("Gig-steady: analysing", "gigsteady.analyse");
+        // Resolve's progress suite: record whether it exists and accepts a start (it drew nothing in the first test)
+        int suite = OFX::Private::gProgressSuiteV2 ? 2 : OFX::Private::gProgressSuiteV1 ? 1 : 0;
+        int startStat = -999;
+        if (OFX::Private::gProgressSuiteV2)
+            startStat = OFX::Private::gProgressSuiteV2->progressStart((void*)getHandle(), "Gig-steady: analysing",
+                                                                       "gigsteady.analyse");
+        else if (OFX::Private::gProgressSuiteV1)
+            startStat = OFX::Private::gProgressSuiteV1->progressStart((void*)getHandle(), "Gig-steady: analysing");
+        ProgressPanel* panel = progressOpen("Gig-steady", "Analysing camera movement...");
+        const bool native = panel != nullptr;
         for (int i = 0; i < n; ++i) {
             double mean = -1;
             try {
@@ -181,12 +193,20 @@ private:
             char b[96];
             std::snprintf(b, sizeof b, "%d %.4f %.4f %.5f %.5f\n", static_cast<int>(t0) + i, mean, 0.0, 0.0, 1.0);
             lines += b;
-            if (!progressUpdate(static_cast<double>(i + 1) / n)) {
+            char text[96];
+            std::snprintf(text, sizeof text, "Analysing camera movement: frame %d of %d", i + 1, n);
+            bool go = progressStep(panel, static_cast<double>(i + 1) / n, text);
+            if (startStat == kOfxStatOK && OFX::Private::gProgressSuiteV2 &&
+                OFX::Private::gProgressSuiteV2->progressUpdate((void*)getHandle(), (i + 1.0) / n) == kOfxStatReplyNo)
+                go = false;
+            if (!go) {
                 cancelled = true;
                 break;
             }
         }
-        progressEnd();
+        progressClose(panel);
+        if (startStat == kOfxStatOK && OFX::Private::gProgressSuiteV2)
+            OFX::Private::gProgressSuiteV2->progressEnd((void*)getHandle());
         const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         // pad to a real 3-minute analysis so the save/reload test uses the real size
         const std::string real = lines;
@@ -203,9 +223,11 @@ private:
                       "{\"event\":\"stabilise\",\"now\":%.1f,\"src_range\":[%.1f,%.1f],\"dst_range\":[%.1f,%.1f],"
                       "\"effect_duration\":%.1f,\"instance_range\":[%.1f,%.1f],\"analysed\":[%.1f,%.1f],\"from\":\"%s\","
                       "\"frames\":%d,\"fetched\":%d,\"failed\":%d,\"threw\":%d,\"cancelled\":%s,\"secs\":%.2f,"
-                      "\"stored_bytes\":%zu,\"read_back_bytes\":%zu}",
+                      "\"stored_bytes\":%zu,\"read_back_bytes\":%zu,\"progress_suite\":%d,\"progress_start\":%d,"
+                      "\"native_panel\":%s}",
                       now, src.min, src.max, dst.min, dst.max, dur, ir0, ir1, t0, t1, from, n, fetched, failed, threw,
-                      cancelled ? "true" : "false", secs, cancelled ? 0 : lines.size(), back.size());
+                      cancelled ? "true" : "false", secs, cancelled ? 0 : lines.size(), back.size(), suite, startStat,
+                      native ? "true" : "false");
         logLine(b);
         char msg[300];
         if (cancelled)

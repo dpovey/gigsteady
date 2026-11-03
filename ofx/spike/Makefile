@@ -5,9 +5,9 @@ NAME = GigsteadyProbe
 BUILD = build
 SUP = $(BUILD)/support
 CXXFLAGS = -std=c++17 -O2 -fvisibility=hidden -arch arm64 -I"$(SDK)/OpenFX-1.4/include" -I$(SUP)/include
-LDFLAGS = -bundle -fvisibility=hidden -arch arm64
+LDFLAGS = -bundle -fvisibility=hidden -arch arm64 -framework AppKit
 SUPPORT_SRC = ofxsCore ofxsImageEffect ofxsInteract ofxsLog ofxsMultiThread ofxsParams ofxsProperty ofxsPropertyValidation
-OBJS = $(BUILD)/$(NAME).o $(BUILD)/GigsteadyControls.o $(addprefix $(BUILD)/,$(addsuffix .o,$(SUPPORT_SRC)))
+OBJS = $(BUILD)/$(NAME).o $(BUILD)/GigsteadyControls.o $(BUILD)/ProgressPanel.o $(addprefix $(BUILD)/,$(addsuffix .o,$(SUPPORT_SRC)))
 BUNDLE = $(BUILD)/$(NAME).ofx.bundle
 
 all: $(BUNDLE)
@@ -20,7 +20,11 @@ $(SUP)/.patched: support.patch.py
 $(BUILD)/$(NAME).o: $(NAME).cpp $(SUP)/.patched
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(BUILD)/GigsteadyControls.o: GigsteadyControls.cpp $(SUP)/.patched
+$(BUILD)/ProgressPanel.o: ProgressPanel.mm ProgressPanel.h
+	mkdir -p $(BUILD)
+	$(CXX) -std=c++17 -O2 -fobjc-arc -fvisibility=hidden -arch arm64 -c $< -o $@
+
+$(BUILD)/GigsteadyControls.o: GigsteadyControls.cpp ProgressPanel.h $(SUP)/.patched
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/%.o: $(SUP)/.patched

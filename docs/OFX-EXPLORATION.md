@@ -248,6 +248,26 @@ What this settles:
 - The viewer renders at full scale (3840x2160); thumbnails come at 0.07 to 0.11 scale and should skip the work.
   No call was `interactive`, `draft` or `sequential`.
 
+### Stabilise button and processing order (2026-11-04)
+
+- **Frames can be read inside a button press.** Five presses of a test Stabilise button on a multicam cut each read
+  251 of 251 frames in 3.4 to 3.5 s (about 14 ms a 4K frame), so the plugin can analyse in place, multicam
+  included, without a file lookup.
+- **A ~160 KB result fits in a hidden parameter**: written and read back intact. Survival across a project save and
+  reopen still to confirm.
+- **The plugin is not told the cut's extent.** Every range Resolve reports (source clip, output clip, effect
+  duration) is the whole file or multicam (0 to 280846), and the instance frame range is 0 to 0. The analysis needs
+  another way to find the cut: analyse around the playhead and extend as frames outside the analysed range are
+  rendered, or have a script record the cut extents.
+- **Resolve shows no progress bar** for the OFX progress suite during a button press (Dean saw only the status
+  line). Next build: a native progress window with Cancel, and a log of what the suite returned.
+- **Order, from frame exports** (`ofx/spike/run_order_test.py`, a white test square drawn by the effect): the
+  Color page grade is applied *after* an Edit-page effect (CDL slope 0.5 took the square from 1.0 to 0.71), so
+  colour sits on top as wanted. The Edit Inspector zoom is applied *before* it (the picture zoomed 1.5x, the square
+  stayed 384 px), so an Edit-page effect would see, and in Lock mode fight, the editor's zooms and reframes. The
+  plugin should sit where Resolve's own stabiliser does, before sizing: next test is the effect as the first Color
+  page node.
+
 Not yet tested: speed-changed and compound clips, the Color page node, a Deliver render with render cache, and
 whether the host runs renders concurrently.
 
