@@ -14,5 +14,5 @@ int main(int argc, char** argv)
         OfxPlugin* p = g(i);
         std::printf("plugin %d: %s %s v%u.%u\n", i, p->pluginApi, p->pluginIdentifier, p->pluginVersionMajor, p->pluginVersionMinor);
     }
-    return k == 1 ? 0 : 1;
+    return k >= 1 ? 0 : 1;
 }

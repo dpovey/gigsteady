@@ -27,6 +27,11 @@ sudo make uninstall
 
 In Resolve it appears under Effects > OpenFX > gigsteady > "gigsteady probe".
 
+The bundle also holds "gigsteady" (`GigsteadyControls.cpp`): the planned Inspector controls (Mode Auto/Lock/Track,
+crop budget, manual zoom, de-blur and its settings, overlay, reload), so the layout can be tried in Resolve. It does
+nothing to the picture yet. Mode, framing and de-blur will choose between results the CLI analysis stores in the
+shot's sidecar (both the lock and the track path), so changing them never needs re-analysis.
+
 ## Running the test
 
 `run_probe_test.py` (system Python, Resolve running) builds a throwaway timeline "gigsteady OFX probe test" with

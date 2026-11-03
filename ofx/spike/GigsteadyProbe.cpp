@@ -184,8 +184,11 @@ public:
     OFX::ImageEffect* createInstance(OfxImageEffectHandle h, OFX::ContextEnum) override { return new ProbeEffect(h); }
 };
 
+OFX::PluginFactory* gigsteadyControlsFactory();  // GigsteadyControls.cpp
+
 void OFX::Plugin::getPluginIDs(PluginFactoryArray& ids)
 {
     static ProbeFactory p;
     ids.push_back(&p);
+    ids.push_back(gigsteadyControlsFactory());
 }
