@@ -1,5 +1,6 @@
 // Minimal host-side load check: dlopen the bundle, call the two OFX entry points, print the plugin identity.
 #include <cstdio>
+#include <cstdlib>
 #include <dlfcn.h>
 #include "ofxCore.h"
 int main(int argc, char** argv)
@@ -14,5 +15,6 @@ int main(int argc, char** argv)
         OfxPlugin* p = g(i);
         std::printf("plugin %d: %s %s v%u.%u\n", i, p->pluginApi, p->pluginIdentifier, p->pluginVersionMajor, p->pluginVersionMinor);
     }
-    return k >= 1 ? 0 : 1;
+    int want = argc > 2 ? std::atoi(argv[2]) : 1;
+    return k == want ? 0 : 1;
 }

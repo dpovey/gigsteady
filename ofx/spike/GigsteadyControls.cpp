@@ -10,7 +10,7 @@
 
 #define kName "Gig-steady"
 #define kGrouping "Gig-steady"
-#define kIdentifier "com.dpovey.gigsteady"
+#define kIdentifier "com.dpovey.gigsteady.preview"  // the real plugin gets com.dpovey.gigsteady
 
 namespace {
 
@@ -32,18 +32,20 @@ public:
         m_Guard = fetchDoubleParam("moving_guard");
         m_Denoise = fetchDoubleParam("denoise");
         m_Status = fetchStringParam("status");
-        std::string path = getPropertySet().propGetString("OfxImageEffectPropSrcFilePath", false);
-        m_Status->setValue(path.empty() ? "Controls preview. No source file (multicam?): would look up by multicam frame."
-                                        : "Controls preview: picture passes through. Source: " + path);
-        updateEnabled();
+        updateEnabled();  // setEnabled is allowed in any action; setValue is not, so the status waits for a change
     }
 
     void changedParam(const OFX::InstanceChangedArgs&, const std::string& name) override
     {
         if (name == "reload")
             sendMessage(OFX::Message::eMessageMessage, "", "Reload: not built yet (controls preview).");
-        updateEnabled();
+        if (name != "status") {
+            updateStatus();
+            updateEnabled();
+        }
     }
+
+    void changedClip(const OFX::InstanceChangedArgs&, const std::string&) override { updateStatus(); }
 
     void render(const OFX::RenderArguments& a) override
     {
@@ -53,18 +55,29 @@ public:
         if (dst->getPixelDepth() != OFX::eBitDepthFloat || dst->getPixelComponents() != OFX::ePixelComponentRGBA ||
             src->getPixelDepth() != OFX::eBitDepthFloat || src->getPixelComponents() != OFX::ePixelComponentRGBA)
             OFX::throwSuiteStatusException(kOfxStatErrUnsupported);
+        // copy where the source covers the render window, transparent black elsewhere
         const OfxRectI& w = a.renderWindow;
         const OfxRectI sb = src->getBounds();
         const int x1 = std::max(w.x1, sb.x1), x2 = std::min(w.x2, sb.x2);
-        for (int y = std::max(w.y1, sb.y1); y < std::min(w.y2, sb.y2) && x1 < x2; ++y) {
-            float* d = static_cast<float*>(dst->getPixelAddress(x1, y));
-            const float* s = static_cast<const float*>(src->getPixelAddress(x1, y));
-            if (d && s) std::memcpy(d, s, sizeof(float) * 4 * (x2 - x1));
+        for (int y = w.y1; y < w.y2; ++y) {
+            float* d = static_cast<float*>(dst->getPixelAddress(w.x1, y));
+            if (!d) continue;
+            std::memset(d, 0, sizeof(float) * 4 * (w.x2 - w.x1));
+            const float* s = (y >= sb.y1 && y < sb.y2 && x1 < x2)
+                                 ? static_cast<const float*>(src->getPixelAddress(x1, y)) : nullptr;
+            if (s) std::memcpy(d + 4 * (x1 - w.x1), s, sizeof(float) * 4 * (x2 - x1));
         }
     }
 
 private:
     // grey out what doesn't apply: crop budget is track-only, zoom needs "Manual zoom", de-blur settings need de-blur
+    void updateStatus()
+    {
+        std::string path = getPropertySet().propGetString("OfxImageEffectPropSrcFilePath", false);
+        m_Status->setValue(path.empty() ? "Controls preview. No source file (multicam?): would look up by multicam frame."
+                                        : "Controls preview: picture passes through. Source: " + path);
+    }
+
     void updateEnabled()
     {
         int mode = 0, deblur = 0;
@@ -72,7 +85,8 @@ private:
         m_Deblur->getValue(deblur);
         m_Zoom->setEnabled(m_ManualZoom->getValue());
         m_Budget->setEnabled(mode != kLock);
-        const bool fuse = deblur != kDeblurOff;
+        // Auto de-blur is on in Lock, off in Track; in Auto mode the analysis decides, so leave the settings editable
+        const bool fuse = deblur == kDeblurOn || (deblur == kDeblurAuto && mode != kTrack);
         m_Neighbours->setEnabled(fuse);
         m_Guard->setEnabled(fuse);
         m_Denoise->setEnabled(fuse);
@@ -144,6 +158,8 @@ public:
         OFX::StringParamDescriptor* status = d.defineStringParam("status");
         status->setLabels("Status", "Status", "Status");
         status->setStringType(OFX::eStringTypeLabel);
+        status->setDefault("Controls preview: the picture passes through unchanged.");
+        status->setIsPersistant(false);
         status->setAnimates(false);
         status->setEvaluateOnChange(false);
         page->addChild(*status);

@@ -20,14 +20,14 @@ from there and patched at build time, so nothing third-party is vendored here).
 
 ```
 make                  # build/GigsteadyProbe.ofx.bundle (arm64, ad-hoc signed)
-make check            # loads the bundle outside Resolve and prints the plugin identity
+make check            # loads the bundle outside Resolve and prints both plugin identities
 sudo make install     # copies only, run make first; /Library/OFX/Plugins/GigsteadyProbe.ofx.bundle, then restart Resolve
 sudo make uninstall
 ```
 
 In Resolve it appears under Effects > OpenFX > Gig-steady > "gigsteady probe".
 
-The bundle also holds "Gig-steady" (`GigsteadyControls.cpp`): the planned Inspector controls (Mode Auto/Lock/Track,
+The bundle also holds "Gig-steady" (`GigsteadyControls.cpp`, identifier `com.dpovey.gigsteady.preview`): the planned Inspector controls (Mode Auto/Lock/Track,
 crop budget, manual zoom, de-blur and its settings, overlay, reload), so the layout can be tried in Resolve. It does
 nothing to the picture yet. Mode, framing and de-blur will choose between results the CLI analysis stores in the
 shot's sidecar (both the lock and the track path), so changing them never needs re-analysis.

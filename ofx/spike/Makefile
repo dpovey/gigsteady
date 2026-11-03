@@ -31,10 +31,10 @@ $(BUNDLE): $(OBJS)
 	$(CXX) $(OBJS) -o $(BUNDLE)/Contents/MacOS/$(NAME).ofx $(LDFLAGS)
 	codesign --force -s - $(BUNDLE)/Contents/MacOS/$(NAME).ofx
 
-# load check without Resolve: dlopen the bundle and print the plugin identity
+# load check without Resolve: dlopen the bundle, print both plugin identities, fail unless there are 2
 check: $(BUNDLE)
 	$(CXX) -std=c++17 -arch arm64 -I"$(SDK)/OpenFX-1.4/include" hostcheck.cpp -o $(BUILD)/hostcheck
-	$(BUILD)/hostcheck $(BUNDLE)/Contents/MacOS/$(NAME).ofx
+	$(BUILD)/hostcheck $(BUNDLE)/Contents/MacOS/$(NAME).ofx 2
 
 # install only copies (run `make` first as yourself): building under sudo would leave root-owned build files
 install:
