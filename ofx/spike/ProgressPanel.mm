@@ -5,6 +5,13 @@
 
 #include "ProgressPanel.h"
 
+// The development engine dylib holds a second copy of this class; a unique name per build avoids an Objective-C
+// class clash with the plugin's copy and with earlier reloads.
+#ifndef GS_CANCEL_CLASS
+#define GS_CANCEL_CLASS GSCancelTarget
+#endif
+#define GSCancelTarget GS_CANCEL_CLASS
+
 @interface GSCancelTarget : NSObject
 @property(atomic) BOOL cancelled;
 - (void)cancel:(id)sender;

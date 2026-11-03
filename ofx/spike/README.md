@@ -23,7 +23,14 @@ make                  # build/GigsteadyProbe.ofx.bundle (arm64, ad-hoc signed)
 make check            # loads the bundle outside Resolve and prints both plugin identities
 sudo make install     # copies only, run make first; /Library/OFX/Plugins/GigsteadyProbe.ofx.bundle, then restart Resolve
 sudo make uninstall
+make engine           # development engine: reloads into a running Resolve, no sudo, no restart
+make engine-off       # back to the engine built into the plugin
 ```
+
+Everything that touches pixels or runs the analysis is in the engine (`Engine.cpp`, `ProgressPanel.mm`, C interface
+in `Engine.h`). `make engine` puts a copy in `~/Library/Application Support/Gig-steady/dev/`; the installed plugin
+loads it again whenever it changes. Changing the controls (`GigsteadyControls.cpp`) or `Engine.h` still needs
+`make`, `sudo make install` and a Resolve restart.
 
 In Resolve it appears under Effects > OpenFX > Gig-steady > "gigsteady probe".
 

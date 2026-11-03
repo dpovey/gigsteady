@@ -7,7 +7,7 @@ SUP = $(BUILD)/support
 CXXFLAGS = -std=c++17 -O2 -fvisibility=hidden -arch arm64 -I"$(SDK)/OpenFX-1.4/include" -I$(SUP)/include
 LDFLAGS = -bundle -fvisibility=hidden -arch arm64 -framework AppKit
 SUPPORT_SRC = ofxsCore ofxsImageEffect ofxsInteract ofxsLog ofxsMultiThread ofxsParams ofxsProperty ofxsPropertyValidation
-OBJS = $(BUILD)/$(NAME).o $(BUILD)/GigsteadyControls.o $(BUILD)/ProgressPanel.o $(addprefix $(BUILD)/,$(addsuffix .o,$(SUPPORT_SRC)))
+OBJS = $(BUILD)/$(NAME).o $(BUILD)/GigsteadyControls.o $(BUILD)/Engine.o $(BUILD)/ProgressPanel.o $(addprefix $(BUILD)/,$(addsuffix .o,$(SUPPORT_SRC)))
 BUNDLE = $(BUILD)/$(NAME).ofx.bundle
 
 all: $(BUNDLE)
@@ -24,7 +24,26 @@ $(BUILD)/ProgressPanel.o: ProgressPanel.mm ProgressPanel.h
 	mkdir -p $(BUILD)
 	$(CXX) -std=c++17 -O2 -fobjc-arc -fvisibility=hidden -arch arm64 -c $< -o $@
 
-$(BUILD)/GigsteadyControls.o: GigsteadyControls.cpp ProgressPanel.h $(SUP)/.patched
+$(BUILD)/Engine.o: Engine.cpp Engine.h ProgressPanel.h
+	mkdir -p $(BUILD)
+	$(CXX) -std=c++17 -O2 -fvisibility=hidden -arch arm64 -c $< -o $@
+
+# Development engine: no sudo, no Resolve restart; the installed plugin reloads it when it changes.
+DEV_DIR = $(HOME)/Library/Application Support/Gig-steady/dev
+DEV_ENGINE = $(DEV_DIR)/libgigsteady_engine.dylib
+STAMP := $(shell date +%s)
+engine: Engine.cpp Engine.h ProgressPanel.mm ProgressPanel.h
+	mkdir -p "$(DEV_DIR)" $(BUILD)
+	$(CXX) -std=c++17 -O2 -fvisibility=hidden -arch arm64 -DGS_ENGINE_DYLIB -c Engine.cpp -o $(BUILD)/dev_Engine.o
+	$(CXX) -std=c++17 -O2 -fobjc-arc -fvisibility=hidden -arch arm64 -DGS_CANCEL_CLASS=GSCancel_$(STAMP) -c ProgressPanel.mm -o $(BUILD)/dev_ProgressPanel.o
+	$(CXX) -dynamiclib -arch arm64 -framework AppKit $(BUILD)/dev_Engine.o $(BUILD)/dev_ProgressPanel.o -o $(BUILD)/libgigsteady_engine.dylib
+	codesign --force -s - $(BUILD)/libgigsteady_engine.dylib
+	mv -f $(BUILD)/libgigsteady_engine.dylib "$(DEV_ENGINE)"
+
+engine-off:
+	rm -f "$(DEV_ENGINE)"
+
+$(BUILD)/GigsteadyControls.o: GigsteadyControls.cpp Engine.h $(SUP)/.patched
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/%.o: $(SUP)/.patched
@@ -53,4 +72,4 @@ uninstall:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all check install uninstall clean
+.PHONY: all check engine engine-off install uninstall clean
