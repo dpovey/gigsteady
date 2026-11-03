@@ -36,7 +36,9 @@ check: $(BUNDLE)
 	$(CXX) -std=c++17 -arch arm64 -I"$(SDK)/OpenFX-1.4/include" hostcheck.cpp -o $(BUILD)/hostcheck
 	$(BUILD)/hostcheck $(BUNDLE)/Contents/MacOS/$(NAME).ofx
 
-install: $(BUNDLE)
+# install only copies (run `make` first as yourself): building under sudo would leave root-owned build files
+install:
+	test -f $(BUNDLE)/Contents/MacOS/$(NAME).ofx || { echo "run make first (not as root)"; exit 1; }
 	mkdir -p /Library/OFX/Plugins
 	rm -rf /Library/OFX/Plugins/$(NAME).ofx.bundle
 	cp -R $(BUNDLE) /Library/OFX/Plugins/

@@ -21,7 +21,7 @@ from there and patched at build time, so nothing third-party is vendored here).
 ```
 make                  # build/GigsteadyProbe.ofx.bundle (arm64, ad-hoc signed)
 make check            # loads the bundle outside Resolve and prints the plugin identity
-sudo make install     # /Library/OFX/Plugins/GigsteadyProbe.ofx.bundle, then restart Resolve
+sudo make install     # copies only, run make first; /Library/OFX/Plugins/GigsteadyProbe.ofx.bundle, then restart Resolve
 sudo make uninstall
 ```
 
