@@ -28,6 +28,11 @@ $(BUNDLE): $(OBJS)
 	$(CXX) $(OBJS) -o $(BUNDLE)/Contents/MacOS/$(NAME).ofx $(LDFLAGS)
 	codesign --force -s - $(BUNDLE)/Contents/MacOS/$(NAME).ofx
 
+# load check without Resolve: dlopen the bundle and print the plugin identity
+check: $(BUNDLE)
+	$(CXX) -std=c++17 -arch arm64 -I"$(SDK)/OpenFX-1.4/include" hostcheck.cpp -o $(BUILD)/hostcheck
+	$(BUILD)/hostcheck $(BUNDLE)/Contents/MacOS/$(NAME).ofx
+
 install: $(BUNDLE)
 	mkdir -p /Library/OFX/Plugins
 	rm -rf /Library/OFX/Plugins/$(NAME).ofx.bundle
@@ -39,4 +44,4 @@ uninstall:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all install uninstall clean
+.PHONY: all check install uninstall clean

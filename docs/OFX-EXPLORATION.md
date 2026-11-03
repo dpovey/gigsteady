@@ -223,23 +223,28 @@ Probe (`ofx/spike`, pass-through, CPU, float RGBA) installed in `/Library/OFX/Pl
 `TimelineItem.AddEffect("ofx", "Open FX/gigsteady/gigsteady probe")` on a throwaway timeline, viewer stepped over
 12 frames of each clip. 39 render calls; log kept locally (not in git) in `work/ofx_probe/probe_2026-11-03.log`.
 
-| Clip | `SrcFilePath` | `time` / `SrcFrame` | Frame range | ±2 fetches (4K) |
-|---|---|---|---|---|
-| Plain clip, Static Desk 65899–66004 | the file | source frame, `SrcFrame == time` | whole file, 0–243135 | 104/104 ok, median 8 ms, max 48 ms |
-| Same file trimmed to 65950–65990 | the file | source frame | whole file | ok, including frames before the trim in point |
-| Multicam cut, Static Desk angle | empty | multicam frame (76359), not the angle's source frame | whole multicam, 0–280846 | 52/52 ok, median 15 ms, max 181 ms (first) |
+Fetch numbers are full-scale (3840x2160) viewer renders only. The playhead stepped forward one frame at a time, so
+the -2, -1 and +1 neighbours were mostly already decoded; the +2 fetch was the only new frame each step.
+
+| Clip | `SrcFilePath` | `time` / `SrcFrame` | Frame range | ±2 fetches | Median, all / +2 only |
+|---|---|---|---|---|---|
+| Plain clip, Static Desk 65899–66004 | the file | source frame, `SrcFrame == time` | whole file, 0–243135 | 44/44 returned | 9 ms / 19 ms |
+| Same file trimmed to 65950–65990 | the file | source frame | whole file | 48/48 returned | 9 ms / 18 ms |
+| Multicam cut, Static Desk angle | empty | multicam frame (76359), not the angle's source frame | whole multicam, 0–280846 | 52/52 returned | 15 ms / 23 ms (first fetch 181 ms) |
 
 What this settles:
 - **Source identity on plain clips works.** File path and source frame are both there, trimmed or not, so a sidecar
-  keyed by path and source frame is enough. Neighbour fetches reach past the cut's in and out points into the file,
-  which is what de-blur needs.
-- **Multicam does not give the file.** The effect sees multicam time and no path. Our FCPXML reader already maps
-  multicam frame plus angle to file and source frame (here multicam 76359 on Static Desk is file frame 65899, the
-  same frame as the plain test), so the sidecar can be keyed by multicam name and multicam frame instead. The angle
-  is not visible to the plugin; the sidecar has to carry it, which is unambiguous while one multicam frame is used
-  by at most one cut.
-- **Fetch cost is acceptable.** About 8 to 15 ms per 4K float frame on the CPU path, so 8 neighbours is roughly
-  0.1 s a frame: fine for scrubbing and rendering, not real-time playback.
+  keyed by path and source frame is enough. Fetches at 65948 and 65949, before the trimmed clip's in point, returned
+  an image. This spike did not check that it was the real neighbour rather than a clamped edge frame; the probe now
+  logs a pixel signature per fetch to settle that on the next run. The out point was not exercised.
+- **Multicam does not give the file.** The effect sees multicam time and no path. Our FCPXML reader (not the
+  plugin) maps multicam frame plus angle to file and source frame: here multicam 76359 on Static Desk is file frame
+  65899, the same frame as the plain test. So the sidecar can be keyed by multicam name and multicam frame instead.
+  The angle is not visible to the plugin; the sidecar has to carry it, which is unambiguous while one multicam frame
+  is used by at most one cut.
+- **Fetch cost looks acceptable.** A newly decoded 4K float frame took about 18 to 23 ms on the CPU path, a cached
+  one about 9 to 15 ms. With 8 neighbours after a seek, expect roughly 0.2 s a frame or more: fine for scrubbing and
+  rendering, not real-time playback. Uncached and Deliver-render costs are still to measure.
 - The viewer renders at full scale (3840x2160); thumbnails come at 0.07 to 0.11 scale and should skip the work.
   No call was `interactive`, `draft` or `sequential`.
 

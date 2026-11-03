@@ -19,7 +19,8 @@ Needs the Xcode command line tools and DaVinci Resolve (its OFX SDK is under
 from there and patched at build time, so nothing third-party is vendored here).
 
 ```
-make                  # build/GigsteadyProbe.ofx.bundle (arm64, ad-hoc signed); build/hostcheck loads it
+make                  # build/GigsteadyProbe.ofx.bundle (arm64, ad-hoc signed)
+make check            # loads the bundle outside Resolve and prints the plugin identity
 sudo make install     # /Library/OFX/Plugins/GigsteadyProbe.ofx.bundle, then restart Resolve
 sudo make uninstall
 ```
@@ -28,6 +29,9 @@ In Resolve it appears under Effects > OpenFX > gigsteady > "gigsteady probe".
 
 ## Running the test
 
-`run_probe_test.py` (system Python, Resolve running) builds a throwaway timeline "gigsteady OFX probe test" from a
-shots list, applies the probe with `TimelineItem.AddEffect("ofx", ...)`, and queues one render job for it (started
-by job id, never a bare `StartRendering()`). `summarise_log.py` turns the log into a table per clip.
+`run_probe_test.py` (system Python, Resolve running) builds a throwaway timeline "gigsteady OFX probe test" with
+three hardcoded clips (a plain clip, a trimmed clip, a multicam cut), applies the probe to each with
+`TimelineItem.AddEffect("ofx", ...)` and steps the playhead so the viewer renders them. It never starts a render; a
+Deliver render is done by hand or with the editor's render tool. `cleanup` deletes the test timeline.
+`summarise_log.py` turns the log into a table per source file. Each fetch is logged with a pixel signature (`sig`),
+so a fetch that returned a clamped edge frame instead of the real neighbour shows up as a repeated signature.

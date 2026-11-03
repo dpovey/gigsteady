@@ -5,6 +5,7 @@
 //   - what time does render() get, and the clip's frame range (mapped and unmapped)?
 //   - can neighbouring frames (t-r .. t+r) be fetched, at the clip edges too, and how long does each fetch take?
 // CPU only, float RGBA. One JSON line per render call, appended to ~/Library/Logs/gigsteady-ofx-spike.log.
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -37,10 +38,33 @@ static std::string esc(const std::string& s)
 {
     std::string o;
     for (char c : s) {
-        if (c == '"' || c == '\\') o += '\\';
-        o += c;
+        if (c == '"' || c == '\\') {
+            o += '\\';
+            o += c;
+        } else if (static_cast<unsigned char>(c) < 0x20) {
+            char b[8];
+            std::snprintf(b, sizeof b, "\\u%04x", c);
+            o += b;
+        } else {
+            o += c;
+        }
     }
     return o;
+}
+
+// Sum of a 16x16 grid of pixels: tells whether two fetches returned the same frame (Resolve may clamp at edges).
+static double sig(OFX::Image* im)
+{
+    if (!im || im->getPixelDepth() != OFX::eBitDepthFloat || im->getPixelComponents() != OFX::ePixelComponentRGBA)
+        return -1;
+    const OfxRectI b = im->getBounds();
+    double sum = 0;
+    for (int j = 0; j < 16; ++j)
+        for (int i = 0; i < 16; ++i) {
+            int x = b.x1 + (b.x2 - b.x1) * (2 * i + 1) / 32, y = b.y1 + (b.y2 - b.y1) * (2 * j + 1) / 32;
+            if (const float* p = static_cast<const float*>(im->getPixelAddress(x, y))) sum += p[0] + p[1] + p[2];
+        }
+    return sum;
 }
 
 class ProbeEffect : public OFX::ImageEffect {
@@ -72,11 +96,17 @@ public:
         for (int d = -r; d <= r; ++d) {
             if (d == 0) continue;
             auto s = std::chrono::steady_clock::now();
-            std::unique_ptr<OFX::Image> n(m_Src->fetchImage(t + d));
+            std::unique_ptr<OFX::Image> n;
+            const char* err = "";
+            try {
+                n.reset(m_Src->fetchImage(t + d));
+            } catch (...) {  // the support library throws on any status but kOfxStatFailed; log it, don't abort
+                err = "threw";
+            }
             double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s).count();
-            char b[96];
-            std::snprintf(b, sizeof b, "%s{\"d\":%d,\"ok\":%s,\"ms\":%.2f}", fetches.empty() ? "" : ",", d,
-                          n ? "true" : "false", ms);
+            char b[160];
+            std::snprintf(b, sizeof b, "%s{\"d\":%d,\"ok\":%s,\"err\":\"%s\",\"ms\":%.2f,\"sig\":%.4f}",
+                          fetches.empty() ? "" : ",", d, n ? "true" : "false", err, ms, sig(n.get()));
             fetches += b;
         }
 
@@ -84,22 +114,26 @@ public:
         std::snprintf(head, sizeof head,
                       "{\"event\":\"render\",\"time\":%.3f,\"src_frame\":%d,\"range\":[%.1f,%.1f],\"unmapped\":[%.1f,%.1f],"
                       "\"fps\":%.3f,\"scale\":[%.3f,%.3f],\"window\":[%d,%d,%d,%d],\"draft\":%s,\"interactive\":%s,"
-                      "\"sequential\":%s,\"metal\":%s,\"src_ms\":%.2f,",
+                      "\"sequential\":%s,\"metal\":%s,\"src_ms\":%.2f,\"src_sig\":%.4f,",
                       t, a.srcFrame, fr.min, fr.max, ur.min, ur.max, m_Src->getFrameRate(), a.renderScale.x,
                       a.renderScale.y, a.renderWindow.x1, a.renderWindow.y1, a.renderWindow.x2, a.renderWindow.y2,
                       a.renderQualityDraft ? "true" : "false", a.interactiveRenderStatus ? "true" : "false",
-                      a.sequentialRenderStatus ? "true" : "false", a.isEnabledMetalRender ? "true" : "false", ms0);
+                      a.sequentialRenderStatus ? "true" : "false", a.isEnabledMetalRender ? "true" : "false", ms0,
+                      sig(src.get()));
         logLine(std::string(head) + "\"src_path\":\"" + esc(srcPath()) + "\",\"fetch\":[" + fetches + "]}");
 
         if (!dst || !src) OFX::throwSuiteStatusException(kOfxStatFailed);
         if (dst->getPixelDepth() != OFX::eBitDepthFloat || dst->getPixelComponents() != OFX::ePixelComponentRGBA ||
             src->getPixelDepth() != OFX::eBitDepthFloat || src->getPixelComponents() != OFX::ePixelComponentRGBA)
             OFX::throwSuiteStatusException(kOfxStatErrUnsupported);
+        // copy the part of the render window the source covers; the source can be smaller than the output
         const OfxRectI& w = a.renderWindow;
-        for (int y = w.y1; y < w.y2; ++y) {
-            float* d = static_cast<float*>(dst->getPixelAddress(w.x1, y));
-            const float* s = static_cast<const float*>(src->getPixelAddress(w.x1, y));
-            if (d && s) std::memcpy(d, s, sizeof(float) * 4 * (w.x2 - w.x1));
+        const OfxRectI sb = src->getBounds();
+        const int x1 = std::max(w.x1, sb.x1), x2 = std::min(w.x2, sb.x2);
+        for (int y = std::max(w.y1, sb.y1); y < std::min(w.y2, sb.y2) && x1 < x2; ++y) {
+            float* d = static_cast<float*>(dst->getPixelAddress(x1, y));
+            const float* s = static_cast<const float*>(src->getPixelAddress(x1, y));
+            if (d && s) std::memcpy(d, s, sizeof(float) * 4 * (x2 - x1));
         }
     }
 

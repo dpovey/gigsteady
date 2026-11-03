@@ -46,7 +46,7 @@ def main() -> None:
     p = r.GetProjectManager().GetCurrentProject()
     check(not p.IsRenderingInProgress(), "a render is in progress")
     cur = p.GetCurrentTimeline()
-    view = (cur.GetName(), cur.GetCurrentTimecode(), cur.GetMarkInOut().get("video", {}))
+    view = (cur.GetUniqueId(), cur.GetCurrentTimecode(), cur.GetMarkInOut().get("video", {}))
     st = json.loads(STATE.read_text()) if STATE.exists() else {}
     try:
         if cmd == "build":
@@ -71,6 +71,8 @@ def main() -> None:
             p.SetCurrentTimeline(tl)
             check(p.GetCurrentTimeline().GetUniqueId() == tl.GetUniqueId(), "could not open the test timeline")
             for label, key, a, b in CLIPS:
+                # AppendToTimeline goes to the current timeline: stop if it changed under us
+                check(p.GetCurrentTimeline().GetUniqueId() == tl.GetUniqueId(), "current timeline changed; stopping")
                 new = mp.AppendToTimeline([{"mediaPoolItem": items[key], "startFrame": a, "endFrame": b,
                                             "mediaType": 1, "trackIndex": 1}]) or []
                 check(len(new) == 1, f"{label}: append returned {len(new)}")
@@ -96,18 +98,20 @@ def main() -> None:
             tl = find_timeline_by_id(p, st.get("timeline", ""))
             check(tl is not None and tl.GetName() == NAME, "test timeline not found or renamed; leaving it")
             if p.GetCurrentTimeline().GetUniqueId() == tl.GetUniqueId():
-                p.SetCurrentTimeline(find_timeline(p, view[0]) if view[0] != NAME else p.GetTimelineByIndex(1))
+                others = [p.GetTimelineByIndex(i) for i in range(1, p.GetTimelineCount() + 1)]
+                others = [o for o in others if o.GetUniqueId() != tl.GetUniqueId()]
+                check(others and p.SetCurrentTimeline(others[0]), "could not switch off the test timeline")
             p.GetMediaPool().DeleteTimelines([tl])
             check(find_timeline_by_id(p, st["timeline"]) is None, "test timeline still there")
             st["deleted"] = True
             STATE.write_text(json.dumps(st, indent=1))
             print("deleted", NAME)
     finally:
-        tl = find_timeline(p, view[0])
+        tl = find_timeline_by_id(p, view[0])
         if tl is not None:
             p.SetCurrentTimeline(tl)
             if "in" in view[2]:
-                tl.SetMarkInOut(view[2]["in"], view[2]["out"])
+                tl.SetMarkInOut(view[2]["in"], view[2]["out"], "video")
             tl.SetCurrentTimecode(view[1])
             print("restored", view)
 
