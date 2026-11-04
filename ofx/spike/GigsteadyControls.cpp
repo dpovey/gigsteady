@@ -34,6 +34,7 @@ enum Mode { kAuto, kLock, kTrack };
 constexpr int kSizeTestFrames = 4500;
 // Resolve sizes a push button to its label; spaces give the side padding its own Stabilize button has
 constexpr const char* kStabiliseLabel = "            Stabilise            ";
+constexpr const char* kRestabiliseLabel = "         Stabilise again         ";
 constexpr const char* kReloadLabel = "        Reload analysis        ";  // a 3-minute clip at 25 fps
 
 std::mutex gLogMutex;
@@ -118,7 +119,12 @@ public:
         m_Analysis = fetchStringParam("analysis");
         m_Key = fetchStringParam("analysis_key");
         m_Pattern = fetchBooleanParam("test_pattern");
-        updateEnabled();  // setEnabled is allowed in any action; setValue is not, so the status waits for a change
+        m_Shot = fetchGroupParam("shot");
+        m_Go = fetchPushButtonParam("stabilise");
+        // labels and enabled flags are properties, which can be set in any action (values only in a change), so the
+        // heading shows the saved state as soon as the clip loads
+        updateEnabled();
+        updateLabels();
     }
 
     void changedParam(const OFX::InstanceChangedArgs& args, const std::string& name) override
@@ -232,27 +238,51 @@ private:
                       e.build(), now, t0, t1, from, res.frames, res.fetched, res.failed,
                       res.cancelled ? "true" : "false", res.secs, back.size(), res.nativePanel ? "true" : "false");
         logLine(b);
-        m_Status->setValue(std::string(res.status) + " [" + e.build() + "]");
+        // the box and heading only ever describe the saved result: Resolve saves the box's text with the project and a
+        // plugin can't rewrite it on load, so a transient "cancelled" would stick
+        updateStatus(std::string(" [") + e.build() + "]");
     }
 
-    // grey out what doesn't apply: crop budget is track-only, zoom needs "Manual zoom", de-blur settings need de-blur
-    void updateStatus()
+    enum class State { kNone, kDone, kDirty };
+    State state()
     {
         std::string stored;
         m_Key->getValue(stored);
-        if (!stored.empty() && stored != key()) {
-            m_Status->setValue("Settings changed: press Stabilise to re-analyse (showing the previous result).");
+        return stored.empty() ? State::kNone : stored != key() ? State::kDirty : State::kDone;
+    }
+
+    // plain-text status: the group heading and the button label (candidates for replacing the Status box)
+    void updateLabels()
+    {
+        const State st = state();
+        const char* heading = st == State::kNone  ? "Stabilise: not analysed"
+                              : st == State::kDone ? "Stabilise: done"
+                                                   : "Stabilise: settings changed";
+        m_Shot->setLabels(heading, heading, heading);
+        const char* button = st == State::kDirty ? kRestabiliseLabel : kStabiliseLabel;
+        m_Go->setLabels(button, button, button);
+    }
+
+    // grey out what doesn't apply: crop budget is track-only, zoom needs "Manual zoom", de-blur settings need de-blur
+    void updateStatus(const std::string& suffix = "")
+    {
+        updateLabels();
+        const State st = state();
+        if (st == State::kDirty) {
+            m_Status->setValue("Settings changed: press Stabilise to re-analyse (showing the previous result)." + suffix);
             return;
         }
-        if (!stored.empty()) {
+        if (st == State::kDone) {
             std::string a;
             m_Analysis->getValue(a);
-            m_Status->setValue("Stabilised (" + std::to_string(a.size() / 1024) + " KB stored with the project).");
+            m_Status->setValue("Stabilised (" + std::to_string(a.size() / 1024) + " KB stored with the project)." +
+                               suffix);
             return;
         }
         std::string path = getPropertySet().propGetString("OfxImageEffectPropSrcFilePath", false);
-        m_Status->setValue(path.empty() ? "Controls preview. No source file (multicam?): would look up by multicam frame."
-                                        : "Controls preview: picture passes through. Source: " + path);
+        m_Status->setValue((path.empty() ? "Controls preview. No source file (multicam?): would look up by multicam frame."
+                                         : "Controls preview: picture passes through. Source: " + path) +
+                           suffix);
     }
 
     void updateEnabled()
@@ -276,6 +306,8 @@ private:
     OFX::IntParam* m_Neighbours;
     OFX::StringParam *m_Status, *m_Analysis, *m_Key;
     OFX::BooleanParam* m_Pattern;
+    OFX::GroupParam* m_Shot;
+    OFX::PushButtonParam* m_Go;
 };
 
 OFX::GroupParamDescriptor* group(OFX::ImageEffectDescriptor& d, OFX::PageParamDescriptor* page, const char* name,
