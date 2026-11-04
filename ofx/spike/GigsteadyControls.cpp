@@ -1,12 +1,8 @@
-// gigsteady OFX spike: the planned control layout, plus the feasibility tests for a "Stabilise" button that works like
-// Resolve's own stabiliser (analyse in place with a progress bar, keep the result in the project, re-run when settings
-// change, effect off = original). The picture passes through unchanged except for the optional test pattern.
-//
-// Stabilise (test): fetches each frame of the clip inside the button press, with a cancellable progress bar, computes a
-// stand-in per-frame result, and stores it in a hidden parameter sized like a real 3-minute analysis (4500 frames),
-// to learn whether Resolve allows frame fetches outside render, saves a ~150 KB parameter with the project, and which
-// frame range the clip covers. Test pattern: white and red squares, to see whether Resolve's grade and zoom are
-// applied after this effect. Results go to ~/Library/Logs/gigsteady-ofx-spike.log.
+// Gig-steady OFX plugin (spike): the controls, and a Stabilise button that works like Resolve's own stabiliser:
+// analyse in place with a progress window, keep the result in the project, re-run when settings change, effect off =
+// original. Stabilise hands the frames around the playhead to the engine (Engine.cpp), which runs gigsteady's
+// analysis on them; render warps each frame by the stored path. De-blur and the overlay are controls only so far.
+// Events go to ~/Library/Logs/gigsteady-ofx-spike.log.
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -31,7 +27,6 @@
 namespace {
 
 enum Mode { kAuto, kLock, kTrack };
-constexpr int kSizeTestFrames = 4500;
 // Resolve sizes a push button to its label; spaces give the side padding its own Stabilize button has
 constexpr const char* kStabiliseLabel = "            Stabilise            ";
 constexpr const char* kRestabiliseLabel = "         Stabilise again         ";
@@ -158,8 +153,20 @@ public:
         r.wx1 = a.renderWindow.x1, r.wy1 = a.renderWindow.y1, r.wx2 = a.renderWindow.x2, r.wy2 = a.renderWindow.y2;
         r.scale = a.renderScale.x;
         r.pattern = m_Pattern->getValueAtTime(a.time) || patternFlag();
-        r.analysis = "";
+        std::string analysis;
+        m_Analysis->getValueAtTime(a.time, analysis);
+        r.analysis = analysis.c_str();
+        char settings[32] = "";
+        if (m_ManualZoom->getValueAtTime(a.time))
+            std::snprintf(settings, sizeof settings, "zoom=%.3f", m_Zoom->getValueAtTime(a.time));
+        r.settings = settings;
         engine().render(&r);
+    }
+
+    // the warp reads outside the render window
+    void getRegionsOfInterest(const OFX::RegionsOfInterestArguments&, OFX::RegionOfInterestSetter& rois) override
+    {
+        rois.setRegionOfInterest(*m_Src, m_Src->getRegionOfDefinition(0));
     }
 
 private:
@@ -183,21 +190,18 @@ private:
 
     std::string key()
     {
+        static const char* modes[] = {"auto", "lock", "track"};
+        int mode = 0;
+        m_Mode->getValue(mode);
         char b[64];
-        std::snprintf(b, sizeof b, "budget=%.3f", m_Budget->getValue());
+        std::snprintf(b, sizeof b, "mode=%s budget=%.3f", modes[std::clamp(mode, 0, 2)], m_Budget->getValue());
         return b;
     }
 
-    // Stabilise: pick the frame range, let the engine analyse it (with its progress window), store the result.
+    // Stabilise: the engine picks the frames and analyses them (with its progress window); store the result.
     void stabilise(double now)
     {
-        const OfxRangeD src = m_Src->getFrameRange(), dst = m_Dst->getFrameRange();
-        // Resolve reports the whole file or multicam for every range (spike finding), so analyse around the playhead
-        double t0 = src.min, t1 = src.max;
-        const char* from = "source";
-        if (dst.max > dst.min && dst.max - dst.min < t1 - t0) t0 = dst.min, t1 = dst.max, from = "output";
-        if (t1 - t0 > 1000) t0 = std::max(src.min, now - 375), t1 = std::min(src.max, now + 375), from = "playhead";
-
+        const OfxRangeD src = m_Src->getFrameRange();
         struct Ctx { OFX::Clip* clip; };
         Ctx ctx{m_Src};
         GsHost host{};
@@ -219,25 +223,27 @@ private:
         };
         host.release = [](void*, void* handle) { delete static_cast<OFX::Image*>(handle); };
         host.log = [](const char* line) { logLine(line); };
-        GsAnalyse req{t0, t1, m_Budget->getValue(), kSizeTestFrames};
+        const std::string settings = key();
+        GsAnalyse req{now, src.min, src.max, settings.c_str()};
         GsAnalyseResult res{};
         const Engine& e = engine();
         e.analyse(&host, &req, &res);
         if (res.text) {
             m_Analysis->setValue(res.text);
-            m_Key->setValue(key());
+            m_Key->setValue(settings);
             e.free(res.text);
         }
         std::string back;
         m_Analysis->getValue(back);
-        char b[700];
+        char b[900];
         std::snprintf(b, sizeof b,
-                      "{\"event\":\"stabilise\",\"engine\":\"%s\",\"now\":%.1f,\"analysed\":[%.1f,%.1f],\"from\":\"%s\","
-                      "\"frames\":%d,\"fetched\":%d,\"failed\":%d,\"cancelled\":%s,\"secs\":%.2f,"
-                      "\"read_back_bytes\":%zu,\"native_panel\":%s}",
-                      e.build(), now, t0, t1, from, res.frames, res.fetched, res.failed,
-                      res.cancelled ? "true" : "false", res.secs, back.size(), res.nativePanel ? "true" : "false");
+                      "{\"event\":\"stabilise\",\"engine\":\"%s\",\"settings\":\"%s\",\"now\":%.1f,"
+                      "\"analysed\":[%.1f,%.1f],\"frames\":%d,\"fetched\":%d,\"failed\":%d,\"cancelled\":%s,"
+                      "\"secs\":%.2f,\"stored_bytes\":%zu,\"status\":\"%s\"}",
+                      e.build(), settings.c_str(), now, res.t0, res.t1, res.frames, res.fetched, res.failed,
+                      res.cancelled ? "true" : "false", res.secs, back.size(), res.status);
         logLine(b);
+        if (!res.text && !res.cancelled) sendMessage(OFX::Message::eMessageError, "", res.status);
         // the box and heading only ever describe the saved result: Resolve saves the box's text with the project and a
         // plugin can't rewrite it on load, so a transient "cancelled" would stick
         updateStatus(std::string(" [") + e.build() + "]");
@@ -275,14 +281,27 @@ private:
         if (st == State::kDone) {
             std::string a;
             m_Analysis->getValue(a);
-            m_Status->setValue("Stabilised (" + std::to_string(a.size() / 1024) + " KB stored with the project)." +
-                               suffix);
+            m_Status->setValue(summary(a) + suffix);
             return;
         }
-        std::string path = getPropertySet().propGetString("OfxImageEffectPropSrcFilePath", false);
-        m_Status->setValue((path.empty() ? "Controls preview. No source file (multicam?): would look up by multicam frame."
-                                         : "Controls preview: picture passes through. Source: " + path) +
-                           suffix);
+        m_Status->setValue("Not stabilised: press Stabilise to analyse the frames around the playhead." + suffix);
+    }
+
+    // "Stabilised: lock, zoom 1.020, frames 61837-62337" from the stored result (Engine.cpp writes it)
+    static std::string summary(const std::string& a)
+    {
+        auto field = [&](const char* key) -> std::string {
+            const std::string k = std::string("\"") + key + "\":";
+            const size_t p = a.find(k);
+            if (p == std::string::npos) return "?";
+            size_t b = p + k.size(), e = a.find_first_of(",}", b);
+            std::string v = a.substr(b, e - b);
+            if (!v.empty() && v.front() == '"') v = v.substr(1, v.size() - 2);
+            return v;
+        };
+        const long long t0 = std::atoll(field("t0").c_str()), n = std::atoll(field("frames").c_str());
+        return "Stabilised: " + field("mode") + ", zoom " + field("zoom") + ", frames " + std::to_string(t0) + "-" +
+               std::to_string(t0 + n - 1) + " (others pass through).";
     }
 
     void updateEnabled()
@@ -343,7 +362,7 @@ public:
     {
         d.setLabels(kName, kName, kName);
         d.setPluginGrouping(kGrouping);
-        d.setPluginDescription("Concert-footage stabiliser (controls preview: the picture passes through unchanged)");
+        d.setPluginDescription("Concert-footage stabiliser");
         d.addSupportedContext(OFX::eContextFilter);
         d.addSupportedBitDepth(OFX::eBitDepthFloat);
         d.setSingleInstance(false);

@@ -89,9 +89,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--note", default="", help="extra HTML shown under the instructions")
     p.add_argument("--crop", help="x,y of the full-resolution crop (default: frame centre)")
     p.add_argument("--jobs", type=int, default=3)
+    sub.add_parser("analyse-frames", help="analysis for the OFX plugin: raw luma frames on stdin (see frames.py)")
     p = sub.add_parser("eval", help="independent checks: gyro-truth <clip> <start:n>...")
     p.add_argument("what", choices=["gyro-truth"])
     p.add_argument("rest", nargs=argparse.REMAINDER)
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["analyse-frames"]:  # its own flags (argparse REMAINDER can't take leading --options)
+        from .frames import main as frames_main
+        return frames_main(argv[1:])
     a = ap.parse_args(argv)
     if a.cmd == "probe":
         from .probe import probe

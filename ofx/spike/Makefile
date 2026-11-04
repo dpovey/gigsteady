@@ -9,6 +9,8 @@ LDFLAGS = -bundle -fvisibility=hidden -arch arm64 -framework AppKit
 SUPPORT_SRC = ofxsCore ofxsImageEffect ofxsInteract ofxsLog ofxsMultiThread ofxsParams ofxsProperty ofxsPropertyValidation
 OBJS = $(BUILD)/$(NAME).o $(BUILD)/GigsteadyControls.o $(BUILD)/Engine.o $(BUILD)/ProgressPanel.o $(addprefix $(BUILD)/,$(addsuffix .o,$(SUPPORT_SRC)))
 BUNDLE = $(BUILD)/$(NAME).ofx.bundle
+# the analysis the Stabilise button runs: this repo's own gigsteady (uv sync makes it)
+TOOL = $(abspath ../../.venv/bin/gigsteady)
 
 all: $(BUNDLE)
 
@@ -26,7 +28,7 @@ $(BUILD)/ProgressPanel.o: ProgressPanel.mm ProgressPanel.h
 
 $(BUILD)/Engine.o: Engine.cpp Engine.h ProgressPanel.h
 	mkdir -p $(BUILD)
-	$(CXX) -std=c++17 -O2 -fvisibility=hidden -arch arm64 -c $< -o $@
+	$(CXX) -std=c++17 -O2 -fvisibility=hidden -arch arm64 -DGS_TOOL='"$(TOOL)"' -c $< -o $@
 
 # Development engine: no sudo, no Resolve restart; the installed plugin reloads it when it changes.
 DEV_DIR = $(HOME)/Library/Application Support/Gig-steady/dev
@@ -34,7 +36,7 @@ DEV_ENGINE = $(DEV_DIR)/libgigsteady_engine.dylib
 STAMP := $(shell date +%s)
 engine: Engine.cpp Engine.h ProgressPanel.mm ProgressPanel.h
 	mkdir -p "$(DEV_DIR)" $(BUILD)
-	$(CXX) -std=c++17 -O2 -fvisibility=hidden -arch arm64 -DGS_ENGINE_DYLIB -c Engine.cpp -o $(BUILD)/dev_Engine.o
+	$(CXX) -std=c++17 -O2 -fvisibility=hidden -arch arm64 -DGS_ENGINE_DYLIB -DGS_TOOL='"$(TOOL)"' -c Engine.cpp -o $(BUILD)/dev_Engine.o
 	$(CXX) -std=c++17 -O2 -fobjc-arc -fvisibility=hidden -arch arm64 -DGS_CANCEL_CLASS=GSCancel_$(STAMP) -c ProgressPanel.mm -o $(BUILD)/dev_ProgressPanel.o
 	$(CXX) -dynamiclib -arch arm64 -framework AppKit $(BUILD)/dev_Engine.o $(BUILD)/dev_ProgressPanel.o -o $(BUILD)/libgigsteady_engine.dylib
 	codesign --force -s - $(BUILD)/libgigsteady_engine.dylib
@@ -59,6 +61,10 @@ check: $(BUNDLE)
 	$(CXX) -std=c++17 -arch arm64 -I"$(SDK)/OpenFX-1.4/include" hostcheck.cpp -o $(BUILD)/hostcheck
 	$(BUILD)/hostcheck $(BUNDLE)/Contents/MacOS/$(NAME).ofx 2
 
+# engine test without Resolve (see enginetest.cpp, enginetest.py)
+enginetest: $(BUILD)/Engine.o $(BUILD)/ProgressPanel.o enginetest.cpp
+	$(CXX) -std=c++17 -O2 -arch arm64 enginetest.cpp $(BUILD)/Engine.o $(BUILD)/ProgressPanel.o -framework AppKit -o $(BUILD)/enginetest
+
 # install only copies (run `make` first as yourself): building under sudo would leave root-owned build files
 install:
 	test -f $(BUNDLE)/Contents/MacOS/$(NAME).ofx || { echo "run make first (not as root)"; exit 1; }
@@ -72,4 +78,4 @@ uninstall:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all check engine engine-off install uninstall clean
+.PHONY: all check enginetest engine engine-off install uninstall clean

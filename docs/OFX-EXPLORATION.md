@@ -271,6 +271,24 @@ What this settles:
 Not yet tested: speed-changed and compound clips, the Color page node, a Deliver render with render cache, and
 whether the host runs renders concurrently.
 
+### First stabilising engine (2026-11-05)
+
+The plugin now stabilises: Stabilise fetches the frames around the playhead, shrinks them to 960-wide luma in C++
+and streams them to `gigsteady analyse-frames`; render warps by the stored path. Fetching frames from the host
+instead of decoding the file means multicam (no file path) works the same as a plain clip, at the cost of gyro (no
+file to read it from). Measured outside Resolve on 501 Static Desk frames (`ofx/spike/enginetest.*`):
+
+| Check | Result |
+|---|---|
+| Analysis (fetch + shrink + `analyse-frames`) | 38 s for 501 frames; the Python analysis alone is ~29 s, 5.9 GB peak |
+| Stored result | 15 KB for 501 frames |
+| Path vs the CLI's (ffmpeg luma) | offset 0.1-0.2 px; jitter 0.21 px (x) / 0.36 px (y) rms |
+| Path vs the CLI with ±1 code noise on its own input | jitter 0.37 / 0.70 px rms: the plugin's input change is inside the analysis noise |
+| Render vs CLI warp (Lanczos), same path | mean abs 0.001 (a 1 px shift is 0.0035; unwarped 0.013-0.018) |
+
+Open: the analysis window is a guess at the cut (playhead ± 250 frames); half a pixel of analysis noise on this
+shot is worth a look on its own.
+
 ## Spike plan
 
 Goal: answer risks 1 to 3 and 6 with the smallest build. Estimated one to two days. No gigsteady maths yet.

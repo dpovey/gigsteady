@@ -34,10 +34,16 @@ loads it again whenever it changes. Changing the controls (`GigsteadyControls.cp
 
 In Resolve it appears under Effects > OpenFX > Gig-steady > "gigsteady probe".
 
-The bundle also holds "Gig-steady" (`GigsteadyControls.cpp`, identifier `com.dpovey.gigsteady.preview`): the planned Inspector controls (Mode Auto/Lock/Track,
-crop budget, manual zoom, de-blur and its settings, overlay, reload), so the layout can be tried in Resolve. It does
-nothing to the picture yet. Mode, framing and de-blur will choose between results the CLI analysis stores in the
-shot's sidecar (both the lock and the track path), so changing them never needs re-analysis.
+The bundle also holds "Gig-steady" (`GigsteadyControls.cpp`, identifier `com.dpovey.gigsteady.preview`), the
+stabiliser itself. **Stabilise** reads the 501 frames around the playhead (the plugin isn't told where the cut
+starts and ends), shrinks each to 960-wide luma and streams them to this repo's `gigsteady analyse-frames`
+(`.venv/bin/gigsteady`, built in at compile time), the same analysis as the CLI, with a progress window and Cancel.
+The result (mode, zoom, per-frame correction) is stored in the project; render warps each analysed frame (bilinear)
+and passes other frames through. Mode and crop budget need a re-analysis; manual zoom applies at render. De-blur
+and the overlay are controls only so far. Analysis errors go to `~/Library/Logs/gigsteady-analyse.log`.
+
+`make enginetest` builds a harness that runs the engine on ffmpeg-decoded frames without Resolve;
+`enginetest.py` compares its renders and path with the CLI's.
 
 ## Running the test
 

@@ -64,12 +64,23 @@ def analyse(src: str, start: int, n: int, opt: Options) -> dict:
     """Mode choice and correction path. Returns a dict with p (n,4), mode, and report fields."""
     clip = probe(src)
     g = io.decode_gray(src, start, n)
-    k = clip.width / g.shape[2]
+    fuse_steps = None
+    if opt.mode != "lock" and opt.gyro != "off" and clip.has_rtmd:
+        from .gyro.fuse import gyro_fuser  # step 6
+        fuse_steps = lambda: gyro_fuser(src, start, n, clip.fps)  # noqa: E731 (only read if track mode is chosen)
+    return analyse_gray(g, clip.width, clip.height, opt, fuse_steps)
+
+
+def analyse_gray(g: np.ndarray, width: int, height: int, opt: Options, fuse_steps=None) -> dict:
+    """analyse() on frames already decoded to analysis-size luma (n, h, w) uint8, for a full frame of width x height
+    (the OFX plugin passes the frames Resolve gives it). fuse_steps: None, or a callable giving the gyro steps."""
+    k = width / g.shape[2]
+    scale = width / 3840
     rep: dict = {}
     mode = opt.mode
     if mode != "track":
         r = analyse_lock(g)
-        moved = max(np.ptp(r.p[:, 0]), np.ptp(r.p[:, 1])) * k > MOVED_PX_4K * clip.scale
+        moved = max(np.ptp(r.p[:, 0]), np.ptp(r.p[:, 1])) * k > MOVED_PX_4K * scale
         rep.update(lock_matched=round(float(r.good.mean()), 3), lock_median_corr=round(float(np.median(r.corr)), 3),
                    lock_range_px=round(float(max(np.ptp(r.p[:, 0]), np.ptp(r.p[:, 1])) * k), 1),
                    lighting_states=np.bincount(r.states).tolist())
@@ -80,12 +91,8 @@ def analyse(src: str, start: int, n: int, opt: Options) -> dict:
             mode = "lock"
             p, good, corr = r.p, r.good, r.corr
     if mode == "track":
-        fuse_steps = None
-        if opt.gyro != "off" and clip.has_rtmd:
-            from .gyro.fuse import gyro_fuser  # step 6
-            fuse_steps = gyro_fuser(src, start, n, clip.fps)
-        t = analyse_track(g, k, clip.width, clip.height, budget=opt.crop_budget, smoother=opt.smoother,
-                          fuse_steps=fuse_steps)
+        t = analyse_track(g, k, width, height, budget=opt.crop_budget, smoother=opt.smoother,
+                          fuse_steps=fuse_steps() if fuse_steps else None)
         p, good, corr = t.p, t.good, t.corr
         rep.update(t.report)
     rep.update(mode=mode, matched=round(float(good.mean()), 3), median_corr=round(float(np.median(corr)), 3))
