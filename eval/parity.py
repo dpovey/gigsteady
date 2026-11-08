@@ -12,7 +12,9 @@ from pathlib import Path
 
 import numpy as np
 
-PROTO = Path(os.environ.get("GIGSTEADY_PROTO", "/Users/dean/src/personal/pit-stabilise/data"))
+if "GIGSTEADY_PROTO" not in os.environ:
+    sys.exit("set GIGSTEADY_PROTO to the pit-stabilise prototype data folder")
+PROTO = Path(os.environ["GIGSTEADY_PROTO"]).expanduser()
 
 
 def load(p: Path) -> np.ndarray:

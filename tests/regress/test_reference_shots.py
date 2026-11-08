@@ -11,12 +11,13 @@ from gigsteady.lock import analyse_lock
 from gigsteady.pipeline import Options, stabilise
 from gigsteady.probe import probe
 from gigsteady.track import analyse_track
+from media import dev_dir, local, syd26
 
 FIX = Path(__file__).parent.parent / "fixtures"
-SD = "/Volumes/BOTTB SYD26/STATIC DESKCAM/3O1A7144.MP4"
-PIT = "/Volumes/BOTTB SYD26/PHOTOPIT_ROAMING/0V6A0922.MP4"
-DEV = Path("/Volumes/BOTTB SYD26/gigsteady/dev")
-pytestmark = [pytest.mark.footage, pytest.mark.skipif(not Path(SD).exists(), reason="BOTTB SYD26 not mounted")]
+SD = str(syd26("STATIC DESKCAM/3O1A7144.MP4"))
+PIT = str(syd26("PHOTOPIT_ROAMING/0V6A0922.MP4"))
+DEV = dev_dir()
+pytestmark = [pytest.mark.footage, pytest.mark.skipif(not Path(SD).exists(), reason="set GIGSTEADY_MEDIA_SYD26 to the folder holding STATIC DESKCAM/")]
 
 
 def proto(name):
@@ -36,8 +37,9 @@ def test_lock_path_parity(name):
 def test_track_path_parity(name, shots, smoother):
     s = next(x for x in json.loads((FIX / shots).read_text()) if x["name"] == name)
     _, _, ref = proto(name)
-    c = probe(s["src"])
-    g = io.decode_gray(s["src"], s["start"], s["n"])
+    src = local(s["src"])
+    c = probe(src)
+    g = io.decode_gray(src, s["start"], s["n"])
     r = analyse_track(g, c.width / g.shape[2], c.width, c.height, budget=1.10, smoother=smoother)
     assert np.abs(r.p[:, :2] * 4 - ref).max() < 0.5
 

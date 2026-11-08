@@ -12,11 +12,14 @@ import csv
 import json
 import os
 import random
+import sys
 from pathlib import Path
 
 import numpy as np
 
-PROTO = Path(os.environ.get("GIGSTEADY_PROTO", "/Users/dean/src/personal/pit-stabilise/data")) / "lockoff"
+if "GIGSTEADY_PROTO" not in os.environ:
+    sys.exit("set GIGSTEADY_PROTO to the pit-stabilise prototype data folder")
+PROTO = Path(os.environ["GIGSTEADY_PROTO"]).expanduser() / "lockoff"
 
 
 def load(p: Path) -> np.ndarray:

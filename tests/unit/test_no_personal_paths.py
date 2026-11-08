@@ -1,0 +1,30 @@
+"""Shipped source (public repo) names no user home or personal volume."""
+import re
+import subprocess
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+SHIPPED = ("src", "scripts", "eval", "ofx", "rust")
+SUFFIXES = (".py", ".rs", ".cpp", ".h", ".hpp", ".c", ".sh", ".toml", ".swift", ".m", ".mm", ".json")
+PERSONAL = re.compile(r"/Users/|/Volumes/BOTTB|/private/tmp/claude")
+
+
+def test_no_personal_paths_in_shipped_source():
+    files = subprocess.run(["git", "ls-files", *SHIPPED], cwd=REPO, capture_output=True, text=True,
+                           check=True).stdout.split("\n")
+    bad = []
+    for f in filter(lambda f: f.endswith(SUFFIXES), files):
+        for n, line in enumerate((REPO / f).read_text(errors="replace").splitlines(), 1):
+            if PERSONAL.search(line):
+                bad.append(f"{f}:{n}")
+    assert not bad, bad
+
+
+def test_footage_tests_read_media_from_env(monkeypatch):
+    import sys
+    sys.path.insert(0, str(REPO / "tests/regress"))
+    import media
+    monkeypatch.setenv("GIGSTEADY_MEDIA_SYD26", "/x/syd")
+    assert media.local("/Volumes/BOTTB SYD26/STATIC DESKCAM/a.MP4") == "/x/syd/STATIC DESKCAM/a.MP4"
+    monkeypatch.delenv("GIGSTEADY_MEDIA_SYD26")
+    assert not Path(media.local("/Volumes/BOTTB SYD26/a.MP4")).exists()

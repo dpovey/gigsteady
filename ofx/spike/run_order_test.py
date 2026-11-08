@@ -14,6 +14,7 @@ brightness says whether the grade came after the effect, its width whether the z
 current timeline, playhead and In/Out. State: work/ofx_probe/order_state.json.
 """
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -26,7 +27,9 @@ NAME = "gigsteady OFX order test"
 OUT = ROOT / "work" / "ofx_probe" / "order"
 STATE = ROOT / "work" / "ofx_probe" / "order_state.json"
 FLAG = Path.home() / "Library" / "Logs" / "gigsteady-test-pattern"
-SD_FILE = "/Volumes/BOTTB SYD26/STATIC DESKCAM/3O1A7144.MP4"
+SD_FILE = os.environ.get("GIGSTEADY_SD_FILE", "")   # full path of the Static Deskcam clip 3O1A7144.MP4 as Resolve sees it
+if not SD_FILE:
+    sys.exit("set GIGSTEADY_SD_FILE to the full path of STATIC DESKCAM/3O1A7144.MP4")
 SRC_IN = 65899
 CASES = [("ref", False, None, None), ("fx", True, None, None), ("grade", False, 0.5, None),
          ("fx_grade", True, 0.5, None), ("fx_zoom", True, None, 1.5)]

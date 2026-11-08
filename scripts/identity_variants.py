@@ -5,6 +5,7 @@ Usage: .venv/bin/python scripts/identity_variants.py <out_dir>
 Variants per camera: 444 (ProRes 4444 XQ-free prores_ks profile 4, yuv444p10le, no chroma subsampling) and
 422dec (ProRes 422 HQ, chroma decimated at even columns without the [1 2 1] filter: exact for co-sited sources).
 """
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -17,8 +18,11 @@ from gigsteady import colour as C  # noqa: E402
 from gigsteady.io import read_rgb48  # noqa: E402
 from gigsteady.probe import probe  # noqa: E402
 
-SHOTS = (("PP_rec151212", "/Volumes/BOTTB SYD26/PHOTOPIT_ROAMING/0V6A0916.MP4", 195),
-         ("SD_rec151717", "/Volumes/BOTTB SYD26/STATIC DESKCAM/3O1A7144.MP4", 61797))
+_MEDIA = os.environ.get("GIGSTEADY_MEDIA_SYD26")     # folder holding PHOTOPIT_ROAMING/ and STATIC DESKCAM/
+if not _MEDIA:
+    sys.exit("set GIGSTEADY_MEDIA_SYD26 to the folder holding PHOTOPIT_ROAMING/ and STATIC DESKCAM/")
+SHOTS = (("PP_rec151212", f"{_MEDIA}/PHOTOPIT_ROAMING/0V6A0916.MP4", 195),
+         ("SD_rec151717", f"{_MEDIA}/STATIC DESKCAM/3O1A7144.MP4", 61797))
 
 
 def planes(rgb: np.ndarray, sub: bool) -> bytes:

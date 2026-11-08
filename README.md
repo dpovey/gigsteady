@@ -64,8 +64,13 @@ An OpenFX plugin front end is being explored: [docs/OFX-EXPLORATION.md](docs/OFX
 
 ```
 uv run pytest                      # unit tests, synthetic clips, ~20 s
-uv run pytest -m footage           # regression tests against the author's footage (paths in tests/fixtures)
+uv run pytest -m footage           # regression tests against the author's footage; they skip unless the media is found
 ```
+
+The footage tests read their media from `GIGSTEADY_MEDIA_SYD26` (folder holding `PHOTOPIT_ROAMING/` and
+`STATIC DESKCAM/`), `GIGSTEADY_MEDIA_BOTTB` (folder holding `Footage/CAM A (Roaming)/`), `GIGSTEADY_PROTO`
+(prototype data) and optionally `GIGSTEADY_DEV_DIR` (render scratch); see `tests/regress/media.py`. The scripts in
+`eval/`, `scripts/` and `ofx/spike/` name the variable they need when it is unset.
 
 ## Layout
 

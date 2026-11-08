@@ -31,5 +31,5 @@ packages = ["src/gigsteady"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["footage: needs the media drives (BOTTB, BOTTB SYD26); slow"]
+markers = ["footage: needs the sample media (set GIGSTEADY_MEDIA_BOTTB / GIGSTEADY_MEDIA_SYD26, see tests/regress/media.py); slow"]
 addopts = "-m 'not footage'"

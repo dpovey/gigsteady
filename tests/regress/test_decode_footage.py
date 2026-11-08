@@ -5,17 +5,18 @@ import numpy as np
 import pytest
 
 from gigsteady import io
+from media import bottb, syd26
 
-FILES = ["/Volumes/BOTTB/Footage/CAM A (Roaming)/C5691.MP4",
-         "/Volumes/BOTTB SYD26/PHOTOPIT_ROAMING/0V6A0922.MP4",
-         "/Volumes/BOTTB SYD26/STATIC DESKCAM/3O1A7144.MP4"]
+FILES = [str(bottb("Footage/CAM A (Roaming)/C5691.MP4")),
+         str(syd26("PHOTOPIT_ROAMING/0V6A0922.MP4")),
+         str(syd26("STATIC DESKCAM/3O1A7144.MP4"))]
 
 
 @pytest.mark.footage
 @pytest.mark.parametrize("path", FILES)
 def test_ranged_equals_sequential(path):
     if not Path(path).exists():
-        pytest.skip("drive not mounted")
+        pytest.skip("media not found (set GIGSTEADY_MEDIA_BOTTB / GIGSTEADY_MEDIA_SYD26)")
     seq = io.decode_gray(path, 0, 80).astype(np.int16)
     for start in (13, 37, 61):
         r = io.decode_gray(path, start, 5).astype(np.int16)

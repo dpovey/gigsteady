@@ -11,6 +11,7 @@ render tool (it saves and restores the render settings); this script never start
 back; the current timeline, playhead and In/Out are restored. State: work/ofx_probe/state.json.
 """
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -22,7 +23,9 @@ from gigsteady.resolve.place import check, find_timeline, find_timeline_by_id  #
 
 NAME = "gigsteady OFX probe test"
 STATE = ROOT / "work" / "ofx_probe" / "state.json"
-SD_FILE = "/Volumes/BOTTB SYD26/STATIC DESKCAM/3O1A7144.MP4"
+SD_FILE = os.environ.get("GIGSTEADY_SD_FILE", "")   # full path of the Static Deskcam clip 3O1A7144.MP4 as Resolve sees it
+if not SD_FILE:
+    sys.exit("set GIGSTEADY_SD_FILE to the full path of STATIC DESKCAM/3O1A7144.MP4")
 MULTICAM = "Sydney 2026 Multicam"
 CLIPS = [("plain", SD_FILE, 65899, 66004), ("trimmed", SD_FILE, 65950, 65990), ("multicam", MULTICAM, 76359, 76464)]
 

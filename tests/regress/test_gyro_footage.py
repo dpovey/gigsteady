@@ -7,11 +7,12 @@ import pytest
 
 from gigsteady.gyro import cache
 from gigsteady.pipeline import Options, analyse
+from media import bottb, proto
 
-SRC = "/Volumes/BOTTB/Footage/CAM A (Roaming)/C5691.MP4"
-PROTO = Path("/Users/dean/src/personal/pit-stabilise/data")
+SRC = str(bottb("Footage/CAM A (Roaming)/C5691.MP4"))
+PROTO = proto()
 FIX = Path(__file__).parent.parent / "fixtures/proto_paths"
-pytestmark = [pytest.mark.footage, pytest.mark.skipif(not Path(SRC).exists(), reason="BOTTB not mounted")]
+pytestmark = [pytest.mark.footage, pytest.mark.skipif(not Path(SRC).exists(), reason="set GIGSTEADY_MEDIA_BOTTB to the folder holding Footage/")]
 
 
 def test_cache_matches_full_dump():
