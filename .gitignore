@@ -8,3 +8,6 @@ rust/*/target/
 .pytest_cache/
 rust/*/target/
 work/
+
+# local machine paths for the footage tests (direnv); never commit
+.envrc
