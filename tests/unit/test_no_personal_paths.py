@@ -28,3 +28,15 @@ def test_footage_tests_read_media_from_env(monkeypatch):
     assert media.local("/Volumes/BOTTB SYD26/STATIC DESKCAM/a.MP4") == "/x/syd/STATIC DESKCAM/a.MP4"
     monkeypatch.delenv("GIGSTEADY_MEDIA_SYD26")
     assert not Path(media.local("/Volumes/BOTTB SYD26/a.MP4")).exists()
+
+
+def test_dev_dir_defaults_to_the_media_drive_and_is_not_created_early(tmp_path, monkeypatch):
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "regress"))
+    import media
+    monkeypatch.delenv("GIGSTEADY_DEV_DIR", raising=False)
+    monkeypatch.setenv("GIGSTEADY_MEDIA_SYD26", str(tmp_path))
+    d = media.dev_dir(create=False)
+    assert d == tmp_path / "gigsteady" / "dev" and not d.exists()
+    monkeypatch.setenv("GIGSTEADY_DEV_DIR", str(tmp_path / "elsewhere"))
+    assert media.dev_dir(create=False) == tmp_path / "elsewhere"

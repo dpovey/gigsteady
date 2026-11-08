@@ -16,7 +16,6 @@ from media import dev_dir, local, syd26
 FIX = Path(__file__).parent.parent / "fixtures"
 SD = str(syd26("STATIC DESKCAM/3O1A7144.MP4"))
 PIT = str(syd26("PHOTOPIT_ROAMING/0V6A0922.MP4"))
-DEV = dev_dir()
 pytestmark = [pytest.mark.footage, pytest.mark.skipif(not Path(SD).exists(), reason="set GIGSTEADY_MEDIA_SYD26 to the folder holding STATIC DESKCAM/")]
 
 
@@ -47,7 +46,8 @@ def test_track_path_parity(name, shots, smoother):
 def test_sd_unstab_308139_burst_and_wobble():
     from gigsteady.eval.sharp import compare
     from gigsteady.eval.steady import measure
-    plain, fused = DEV / "t_308139_plain.mov", DEV / "t_308139_fuse.mov"
+    dev = dev_dir()
+    plain, fused = dev / "t_308139_plain.mov", dev / "t_308139_fuse.mov"
     stabilise(SD, 218179, 218338, plain, Options(handles=0, fuse=0))
     rep = stabilise(SD, 218179, 218338, fused, Options(handles=0))
     assert rep["mode"] == "lock" and rep["zoom"] <= 1.03 and rep["fusion"]["fused"] >= 35
@@ -67,7 +67,8 @@ def test_no_deblur_ghost_through_haze():
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "eval"))
     from ghost_check import ghost
-    plain, fused = DEV / "t_155859_plain.mov", DEV / "t_155859_fuse.mov"
+    dev = dev_dir()
+    plain, fused = dev / "t_155859_plain.mov", dev / "t_155859_fuse.mov"
     stabilise(SD, 65899, 66004, plain, Options(handles=0, fuse=0))
     rep = stabilise(SD, 65899, 66004, fused, Options(handles=0))
     g, act = ghost(str(plain), str(fused), (1750, 650, 500, 450))

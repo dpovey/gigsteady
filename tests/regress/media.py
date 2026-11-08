@@ -3,7 +3,8 @@ footage tests skip.
 
   GIGSTEADY_MEDIA_SYD26  the folder holding PHOTOPIT_ROAMING/, STATIC DESKCAM/ (Sydney 2026 cards)
   GIGSTEADY_MEDIA_BOTTB  the folder holding Footage/CAM A (Roaming)/ (Brisbane FX3)
-  GIGSTEADY_DEV_DIR      scratch folder for rendered test output
+  GIGSTEADY_DEV_DIR      scratch folder for rendered test output; default <GIGSTEADY_MEDIA_SYD26>/gigsteady/dev
+                         (full-resolution renders stay off the boot disk), else the temp dir
   GIGSTEADY_PROTO        the pit-stabilise prototype data folder (gyro/, lockoff/)
 """
 import os
@@ -38,9 +39,14 @@ def local(recorded: str) -> str:
     return recorded
 
 
-def dev_dir() -> Path:
-    d = _root("GIGSTEADY_DEV_DIR") or Path(tempfile.gettempdir()) / "gigsteady-dev"
-    d.mkdir(parents=True, exist_ok=True)
+def dev_dir(create: bool = True) -> Path:
+    """Where footage tests write renders; created on first use, not at import."""
+    d = _root("GIGSTEADY_DEV_DIR")
+    if d is None:
+        media = _root("GIGSTEADY_MEDIA_SYD26")
+        d = media / "gigsteady" / "dev" if media else Path(tempfile.gettempdir()) / "gigsteady-dev"
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
     return d
 
 
