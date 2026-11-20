@@ -3,13 +3,24 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 SHIPPED = ("src", "scripts", "eval", "ofx", "rust")
 SUFFIXES = (".py", ".rs", ".cpp", ".h", ".hpp", ".c", ".sh", ".toml", ".swift", ".m", ".mm", ".json")
 PERSONAL = re.compile(r"/Users/|/Volumes/BOTTB|/private/tmp/claude")
 
 
+def _in_git_checkout() -> bool:
+    r = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=REPO, capture_output=True, text=True)
+    return r.returncode == 0 and Path(r.stdout.strip()).resolve() == REPO.resolve()
+
+
 def test_no_personal_paths_in_shipped_source():
+    # Production runs use a `git archive` copy of the code, which has no repository to list files from; the
+    # check belongs to the checkout the code is committed from.
+    if not _in_git_checkout():
+        pytest.skip("not a git checkout (a git archive copy): shipped files cannot be listed")
     files = subprocess.run(["git", "ls-files", *SHIPPED], cwd=REPO, capture_output=True, text=True,
                            check=True).stdout.split("\n")
     bad = []

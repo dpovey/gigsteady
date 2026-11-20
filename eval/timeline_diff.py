@@ -11,6 +11,16 @@ started from the stabiliser's crop). Expected: scale = the stabiliser's zoom, ro
 roll, a shift that moves (that's the stabilisation). Anything else is reported: a constant rotation (wrong sign of the
 angle transform), a scale off the crop (transform composed wrong), a better match one or two frames away (timing),
 colour or level shifts after alignment. Cuts that weren't replaced must be identical.
+
+Two rules keep the flags to real findings (You Oughta Know, Sydney 2026, two false flags out of three):
+- Framing is judged against the stabiliser's zoom only where the editor left the cut at the angle's own sizing.
+  Under the editor's own crop (place_state.json `transform` Zoom over the angle's zoom in shots.json, away from 1)
+  the overlay registers at the master's framing, so the reference is 1.0: SD 273742 (1.575 = a 1.5 crop over the
+  angle's 1.05) registered at 0.994 and was flagged against 1.01, while the SD cuts at the angle's 1.05 register
+  at the stabiliser's 1.01-1.017.
+- Timing is tested at TIMING_POINTS frames through the cut and flagged only when a majority agree on the same
+  non-zero offset. One disagreeing sample is reported (timing_offsets) but not flagged: PP 273155's "-2" was one
+  sample, and 5 of 5 frames registered best at 0 when re-checked.
 """
 import argparse
 import csv
@@ -22,6 +32,32 @@ import cv2
 import numpy as np
 
 W, H = 960, 540
+TIMING_POINTS = 5          # frames per cut tested for a better match one or two frames away
+FRAMING_TOL = 0.01
+
+
+def composed_crop(transform: dict | None, angle_transform: dict | None = None) -> bool:
+    """Was the overlay placed under the editor's own crop: the placed Zoom (place_state.json `transform`, the angle's
+    zoom times the item's) over the angle's own zoom (shots.json `angle_transform`) away from 1?"""
+    t = transform or {}
+    az = ((angle_transform or {}).get("zoom") or (1.0, 1.0))
+    return any(abs(float(t.get(k) or 1.0) / float(z or 1.0) - 1.0) > 1e-3 for k, z in zip(("ZoomX", "ZoomY"), az))
+
+
+def timing_verdict(offsets: list[int]) -> int | None:
+    """The offset a majority of the tested frames agree on, if it is non-zero; else None (no timing flag)."""
+    if not offsets:
+        return None
+    vals, counts = np.unique(offsets, return_counts=True)
+    best = int(vals[np.argmax(counts)])
+    return best if best != 0 and counts.max() * 2 > len(offsets) and counts.max() >= 2 else None
+
+
+def colour_note(dc: np.ndarray) -> str:
+    """The largest per-channel shift (stab minus master, 8-bit codes) over mean, p5 and p95, e.g. 'B p5 -3.0'."""
+    stat = {0: "mean", 1: "p5", 3: "p95"}
+    ch, col = max(((c, k) for c in range(3) for k in stat), key=lambda ck: abs(dc[ck[0], ck[1]]))
+    return f"{'RGB'[ch]} {stat[col]} {dc[ch, col]:+.1f}"
 
 
 def decode(path: str, start: int, n: int) -> np.ndarray:
@@ -87,6 +123,11 @@ def main() -> None:
     man = {m["name"]: m for m in json.loads((a.job / "manifest.json").read_text())}
     st = json.loads((a.job / "place_state.json").read_text())
     placed = {p["name"]: p for p in st["placed"] if p["name"] not in a.unchanged}
+    shots_file = a.job / "shots.json"
+    angle_tr = ({s["name"]: s.get("angle_transform") for s in json.loads(shots_file.read_text())}
+                if shots_file.exists() else {})
+    if not shots_file.exists():
+        print(f"warning: no {shots_file}; an angle's own zoom will read as the editor's crop", flush=True)
     n_total = int(subprocess.run(["ffprobe", "-v", "error", "-count_packets", "-select_streams", "v:0", "-show_entries",
                                   "stream=nb_read_packets", "-of", "csv=p=0", a.stab],
                                  capture_output=True, text=True, check=True).stdout.split()[0])
@@ -112,19 +153,16 @@ def main() -> None:
             print(row, flush=True)
             continue
         z = man[name]["stab_zoom"]
+        composed = composed_crop(placed[name].get("transform"), angle_tr.get(name))
+        ref = 1.0 if composed else z          # what the overlay's scale against the master should be
+        probe = sorted({int(round(n * (j + 1) / (TIMING_POINTS + 1))) for j in range(TIMING_POINTS)})
         fit, offs = [], []
         cs, cm = [], []
-        for f in range(0, n, a.step):
-            w, cc = register(S[f], M[f], z)
+        for f in sorted(set(range(0, n, a.step)) | set(probe)):
+            w, cc = register(S[f], M[f], ref)
             if w is None or cc < 0.5:
                 continue
-            fit.append((*decompose(w), cc))
-            mw = cv2.warpAffine(M[f], w, (W, H), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP)
-            mask = np.zeros((H, W), bool)
-            mask[int(H * .1):int(H * .9), int(W * .1):int(W * .9)] = True
-            cs.append(stats(S[f], mask))
-            cm.append(stats(mw, mask))
-            if f in (n // 4, n // 2, 3 * n // 4):  # timing: does a neighbouring master frame match better?
+            if f in probe:  # timing: does a neighbouring master frame match better?
                 g = grey(S[f])
                 sc = {}
                 for o in (-2, -1, 0, 1, 2):
@@ -132,6 +170,14 @@ def main() -> None:
                         mo = cv2.warpAffine(M[f + o], w, (W, H), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP)
                         sc[o] = float(np.corrcoef(g.ravel(), grey(mo).ravel())[0, 1])
                 offs.append(max(sc, key=sc.get))
+            if f % a.step:  # a timing probe only: framing and colour stay on the --step grid
+                continue
+            fit.append((*decompose(w), cc))
+            mw = cv2.warpAffine(M[f], w, (W, H), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP)
+            mask = np.zeros((H, W), bool)
+            mask[int(H * .1):int(H * .9), int(W * .1):int(W * .9)] = True
+            cs.append(stats(S[f], mask))
+            cm.append(stats(mw, mask))
         if not fit:
             row.update(verdict="NOT REGISTERED")
             rows.append(row)
@@ -140,8 +186,9 @@ def main() -> None:
         F = np.array(fit)
         dc = np.mean(np.array(cs) - np.array(cm), axis=0)  # stab minus master, 8-bit code values, per channel/stat
         row.update(registered=len(F), median_cc=round(float(np.median(F[:, 5])), 3),
-                   stab_zoom=z, zoom_meas=round(float(np.median(F[:, 0])), 4),
-                   zoom_err=round(float(np.median(F[:, 0]) - z), 4),
+                   stab_zoom=z, composed_crop=composed, framing_ref=ref,
+                   zoom_meas=round(float(np.median(F[:, 0])), 4),
+                   zoom_err=round(float(np.median(F[:, 0]) - ref), 4),
                    aspect_err=round(float(np.median(F[:, 0] - F[:, 1])), 4),
                    rot_median=round(float(np.median(F[:, 2])), 3), rot_spread=round(float(np.std(F[:, 2])), 3),
                    shift_spread_px=round(float(np.hypot(F[:, 3].std(), F[:, 4].std()) * 4), 1),
@@ -150,17 +197,18 @@ def main() -> None:
                    d_p5_rgb=" ".join(f"{v:+.2f}" for v in dc[:, 1]),
                    d_p95_rgb=" ".join(f"{v:+.2f}" for v in dc[:, 3]))
         flags = []
-        if abs(row["zoom_err"]) > 0.01:
+        if abs(row["zoom_err"]) > FRAMING_TOL:
             flags.append("framing")
         if abs(row["rot_median"]) > 0.3:
             flags.append("rotation")
-        if any(o != 0 for o in offs):
-            flags.append("timing")
+        t = timing_verdict(offs)
+        if t is not None:
+            flags.append(f"timing {t:+d}")
         if np.abs(dc[:, 0]).max() > 2 or np.abs(dc[:, 1]).max() > 3 or np.abs(dc[:, 3]).max() > 3:
-            flags.append("colour/levels")
+            flags.append(f"colour/levels ({colour_note(dc)})")
         row["verdict"] = "ok" if not flags else "CHECK: " + ", ".join(flags)
         rows.append(row)
-        print({k: row[k] for k in ("cut", "verdict", "zoom_meas", "stab_zoom", "rot_median", "timing_offsets",
+        print({k: row[k] for k in ("cut", "verdict", "zoom_meas", "framing_ref", "rot_median", "timing_offsets",
                                    "d_mean_rgb", "d_p5_rgb", "d_p95_rgb")}, flush=True)
     out = a.out or a.job / "check" / "timeline_diff.csv"
     keys = sorted({k for r in rows for k in r}, key=lambda k: list(rows[0]).index(k) if k in rows[0] else 99)
