@@ -21,11 +21,16 @@ Two rules keep the flags to real findings (You Oughta Know, Sydney 2026, two fal
 - Timing is tested at TIMING_POINTS frames through the cut and flagged only when a majority agree on the same
   non-zero offset. One disagreeing sample is reported (timing_offsets) but not flagged: PP 273155's "-2" was one
   sample, and 5 of 5 frames registered best at 0 when re-checked.
+
+Both renders are streamed in step, one ffmpeg pipe each per cut, keeping only the master frames a timing probe
+compares against, so memory doesn't grow with cut length (whole cuts decoded at once peaked at 7.9 GB).
 """
 import argparse
 import csv
 import json
 import subprocess
+import tempfile
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import cv2
@@ -33,6 +38,8 @@ import numpy as np
 
 W, H = 960, 540
 TIMING_POINTS = 5          # frames per cut tested for a better match one or two frames away
+NEIGH = 2                  # the probe compares master frames f-NEIGH..f+NEIGH
+FRAME_BYTES = W * H * 3
 FRAMING_TOL = 0.01
 
 
@@ -60,13 +67,100 @@ def colour_note(dc: np.ndarray) -> str:
     return f"{'RGB'[ch]} {stat[col]} {dc[ch, col]:+.1f}"
 
 
-def decode(path: str, start: int, n: int) -> np.ndarray:
+def stream(path: str, start: int, n: int) -> Iterator[np.ndarray]:
+    """Up to n RGB frames (H x W x 3) from frame `start`, one at a time from one ffmpeg pipe, so memory holds only
+    the frames the caller keeps. Raises CalledProcessError if ffmpeg fails."""
     ss = ["-ss", f"{(start - 0.25) / 25:.6f}"] if start > 0 else []
-    raw = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", *ss, "-i", path, "-frames:v", str(n),
-                          # to RGB at full size first: resizing in YUV before the conversion biases RGB by ~2 codes
-                          "-vf", f"format=gbrp16le,scale={W}:{H}:flags=area,format=rgb24", "-f", "rawvideo", "-"],
-                         capture_output=True, check=True).stdout
-    return np.frombuffer(raw, np.uint8).reshape(-1, H, W, 3)
+    cmd = ["ffmpeg", "-nostdin", "-v", "error", *ss, "-i", path, "-frames:v", str(n),
+           # to RGB at full size first: resizing in YUV before the conversion biases RGB by ~2 codes
+           "-vf", f"format=gbrp16le,scale={W}:{H}:flags=area,format=rgb24", "-f", "rawvideo", "-"]
+    with tempfile.TemporaryFile() as err:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err, bufsize=FRAME_BYTES)
+        try:
+            while len(raw := p.stdout.read(FRAME_BYTES)) == FRAME_BYTES:
+                yield np.frombuffer(raw, np.uint8).reshape(H, W, 3)
+            if p.wait() != 0:
+                err.seek(0)
+                raise subprocess.CalledProcessError(p.returncode, cmd, stderr=err.read())
+        finally:
+            if p.poll() is None:  # the consumer stopped early (the other render ran out, or an error)
+                p.kill()
+                p.wait()
+            p.stdout.close()
+
+
+def paired(master: str, stab: str, start: int, n: int) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+    """(master, stab) frames in step from both renders, stopping at the shorter."""
+    gm, gs = stream(master, start, n), stream(stab, start, n)
+    try:
+        yield from zip(gm, gs)
+    finally:
+        gm.close()
+        gs.close()
+
+
+def diff_unchanged(pairs: Iterable[tuple[np.ndarray, np.ndarray]]) -> tuple[int, float, int]:
+    """Frames compared, mean and max absolute difference over every pixel and channel."""
+    count, total, peak = 0, 0, 0
+    for m, s in pairs:
+        d = np.abs(m.astype(np.int16) - s.astype(np.int16))
+        total += int(d.sum(dtype=np.int64))
+        peak = max(peak, int(d.max()))
+        count += 1
+    return count, (total / (count * d.size) if count else float("nan")), peak
+
+
+def probe_frames(n: int) -> list[int]:
+    """The TIMING_POINTS frames of an n-frame cut tested for a better match one or two frames away."""
+    return sorted({int(round(n * (j + 1) / (TIMING_POINTS + 1))) for j in range(TIMING_POINTS)})
+
+
+def measure_placed(pairs: Iterable[tuple[np.ndarray, np.ndarray]], n: int, step: int, ref: float):
+    """Register the stab frame to the master's on the --step grid and at the timing probes, holding only the master
+    frames a probe compares against (f-NEIGH..f+NEIGH). n is the cut's expected length; the probes depend on it.
+    Returns (frames read, fit, timing offsets, stab colour stats, master colour stats)."""
+    probe = set(probe_frames(n))
+    todo = set(range(0, n, step)) | probe
+    fit, offs, cs, cm = [], [], [], []
+    mask = np.zeros((H, W), bool)
+    mask[int(H * .1):int(H * .9), int(W * .1):int(W * .9)] = True
+    mbuf: dict[int, np.ndarray] = {}
+    sbuf: dict[int, np.ndarray] = {}
+
+    def one(f: int) -> None:
+        w, cc = register(sbuf[f], mbuf[f], ref)
+        if w is None or cc < 0.5:
+            return
+        if f in probe:  # timing: does a neighbouring master frame match better?
+            g = grey(sbuf[f])
+            sc = {}
+            for o in range(-NEIGH, NEIGH + 1):
+                if f + o in mbuf:
+                    mo = cv2.warpAffine(mbuf[f + o], w, (W, H), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP)
+                    sc[o] = float(np.corrcoef(g.ravel(), grey(mo).ravel())[0, 1])
+            offs.append(max(sc, key=sc.get))
+        if f % step:  # a timing probe only: framing and colour stay on the --step grid
+            return
+        fit.append((*decompose(w), cc))
+        mw = cv2.warpAffine(mbuf[f], w, (W, H), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP)
+        cs.append(stats(sbuf[f], mask))
+        cm.append(stats(mw, mask))
+
+    count = 0
+    for i, (m, s) in enumerate(pairs):
+        count = i + 1
+        mbuf[i] = m
+        if i in todo:
+            sbuf[i] = s
+        f = i - NEIGH  # every master frame f needs has now arrived
+        if f in todo:
+            one(f)
+        sbuf.pop(f, None)
+        mbuf.pop(f - NEIGH, None)
+    for f in range(max(0, count - NEIGH), count):
+        if f in todo:
+            one(f)
+    return count, fit, offs, cs, cm
 
 
 def grey(f: np.ndarray, size=(480, 270)) -> np.ndarray:
@@ -140,44 +234,23 @@ def main() -> None:
         tag = {"Static Desk": "SD", "Photo Pit": "PP"}.get(ang, ang)
         name = f"{tag}_rec{it['start']}"
         k, n = lo - a.range_start, hi - lo
-        M, S = decode(a.master, k, n), decode(a.stab, k, n)
-        n = min(len(M), len(S))
         row = {"cut": name, "angle": ang, "rec_start": lo, "frames": n, "placed": name in placed,
                # titles composited over a moved background differ at their edges; that's expected
                "under_title_frames": sum(max(0, min(hi, e) - max(lo, b)) for b, e in overlays)}
         if name not in placed:
-            d = np.abs(M[:n].astype(np.int16) - S[:n].astype(np.int16))
-            row.update(mean_abs=round(float(d.mean()), 3), max_abs=int(d.max()),
-                       verdict="identical" if d.max() == 0 else ("near" if d.mean() < 0.5 else "DIFFERS"))
+            row["frames"], mean_abs, max_abs = diff_unchanged(paired(a.master, a.stab, k, n))
+            row.update(mean_abs=round(mean_abs, 3), max_abs=max_abs,
+                       verdict="identical" if max_abs == 0 else ("near" if mean_abs < 0.5 else "DIFFERS"))
             rows.append(row)
             print(row, flush=True)
             continue
         z = man[name]["stab_zoom"]
         composed = composed_crop(placed[name].get("transform"), angle_tr.get(name))
         ref = 1.0 if composed else z          # what the overlay's scale against the master should be
-        probe = sorted({int(round(n * (j + 1) / (TIMING_POINTS + 1))) for j in range(TIMING_POINTS)})
-        fit, offs = [], []
-        cs, cm = [], []
-        for f in sorted(set(range(0, n, a.step)) | set(probe)):
-            w, cc = register(S[f], M[f], ref)
-            if w is None or cc < 0.5:
-                continue
-            if f in probe:  # timing: does a neighbouring master frame match better?
-                g = grey(S[f])
-                sc = {}
-                for o in (-2, -1, 0, 1, 2):
-                    if 0 <= f + o < n:
-                        mo = cv2.warpAffine(M[f + o], w, (W, H), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP)
-                        sc[o] = float(np.corrcoef(g.ravel(), grey(mo).ravel())[0, 1])
-                offs.append(max(sc, key=sc.get))
-            if f % a.step:  # a timing probe only: framing and colour stay on the --step grid
-                continue
-            fit.append((*decompose(w), cc))
-            mw = cv2.warpAffine(M[f], w, (W, H), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP)
-            mask = np.zeros((H, W), bool)
-            mask[int(H * .1):int(H * .9), int(W * .1):int(W * .9)] = True
-            cs.append(stats(S[f], mask))
-            cm.append(stats(mw, mask))
+        got, fit, offs, cs, cm = measure_placed(paired(a.master, a.stab, k, n), n, a.step, ref)
+        if got < n:  # a render ran short: the probes and grid follow the frames there are, so measure again
+            n = row["frames"] = got
+            got, fit, offs, cs, cm = measure_placed(paired(a.master, a.stab, k, n), n, a.step, ref)
         if not fit:
             row.update(verdict="NOT REGISTERED")
             rows.append(row)
@@ -211,7 +284,7 @@ def main() -> None:
         print({k: row[k] for k in ("cut", "verdict", "zoom_meas", "framing_ref", "rot_median", "timing_offsets",
                                    "d_mean_rgb", "d_p5_rgb", "d_p95_rgb")}, flush=True)
     out = a.out or a.job / "check" / "timeline_diff.csv"
-    keys = sorted({k for r in rows for k in r}, key=lambda k: list(rows[0]).index(k) if k in rows[0] else 99)
+    keys = list(dict.fromkeys(k for r in rows for k in r))  # first-seen order, the same every run
     with out.open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=keys)
         w.writeheader()
