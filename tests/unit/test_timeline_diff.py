@@ -51,8 +51,61 @@ def test_measure_placed_finds_a_one_frame_lead_from_the_streamed_window():
     got, fit, offs, cs, cm = td.measure_placed(zip(master, stab), 14, 4, 1.0)
     assert got == 14
     probes = td.probe_frames(14)
-    assert len(offs) == len(probes) and all(o == 1 for o in offs[:-1])  # the last probe may sit at the end
+    assert len(offs) == len(probes) and all(o == 1 for o in offs)
     assert len(fit) == len(range(0, 14, 4))
+
+
+def _old_loop(n, step):
+    """The frames registered and, for each probe, the master frames compared, as the whole-cut loop did them."""
+    probe = td.probe_frames(n)
+    order = sorted(set(range(0, n, step)) | set(probe))
+    return [(f, [f + o for o in range(-2, 3) if 0 <= f + o < n] if f in probe else None) for f in order]
+
+
+def test_streamed_window_sees_the_same_frames_as_the_whole_cut_loop(monkeypatch):
+    """Each frame's value is its index; record which stab frame is registered and which master frames it is warped
+    against, and compare with the old whole-cut loop for short and long cuts and several steps."""
+    seen = []
+
+    def register(s, m, ref):
+        seen.append((int(s[0, 0, 0]), []))
+        return np.eye(2, 3, dtype=np.float32), 1.0
+
+    def warp(m, w, size, flags=None):
+        seen[-1][1].append(int(m[0, 0, 0]))
+        return m
+    monkeypatch.setattr(td, "register", register)
+    monkeypatch.setattr(td.cv2, "warpAffine", warp)
+    monkeypatch.setattr(td, "decompose", lambda w: (1.0, 1.0, 0.0, 0.0, 0.0))
+    monkeypatch.setattr(td, "stats", lambda a, m: np.zeros((3, 4)))
+    monkeypatch.setattr(td, "grey", lambda f, size=None: np.array([f[0, 0, 0], 1.0, 2.0], np.float32))
+    for n in range(3, 30):
+        frames = [np.full((td.H, td.W, 3), i, np.uint8) for i in range(n)]
+        probes = set(td.probe_frames(n))
+        for step in (1, 2, 3, 7):
+            seen.clear()
+            td.measure_placed(zip(frames, frames), n, step, 1.0)
+            # on the step grid the last warp is the colour one, against the frame itself
+            got = [(f, (ms[:-1] if f % step == 0 else ms) if f in probes else None) for f, ms in seen]
+            assert got == _old_loop(n, step), (n, step)
+
+
+def test_paired_stops_at_the_shorter_render_and_raises_on_a_failed_one(tmp_path):
+    import shutil
+    import subprocess
+    import pytest
+    if not shutil.which("ffmpeg"):
+        pytest.skip("no ffmpeg")
+    def clip(name, frames):
+        p = tmp_path / name
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"testsrc2=size=320x180:rate=25",
+                        "-frames:v", str(frames), "-pix_fmt", "yuv420p", str(p)], check=True)
+        return str(p)
+    a, b = clip("a.mp4", 10), clip("b.mp4", 6)
+    got = list(td.paired(a, b, 0, 10))
+    assert len(got) == 6 and got[0][0].shape == (td.H, td.W, 3)
+    with pytest.raises(subprocess.CalledProcessError):
+        list(td.paired(a, str(tmp_path / "missing.mp4"), 0, 10))
 
 
 def test_diff_unchanged_matches_whole_array_mean_and_max():

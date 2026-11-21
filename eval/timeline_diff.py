@@ -79,6 +79,8 @@ def stream(path: str, start: int, n: int) -> Iterator[np.ndarray]:
         try:
             while len(raw := p.stdout.read(FRAME_BYTES)) == FRAME_BYTES:
                 yield np.frombuffer(raw, np.uint8).reshape(H, W, 3)
+            if raw:
+                raise ValueError(f"{path}: partial frame at the end of the stream ({len(raw)} bytes)")
             if p.wait() != 0:
                 err.seek(0)
                 raise subprocess.CalledProcessError(p.returncode, cmd, stderr=err.read())
@@ -90,10 +92,14 @@ def stream(path: str, start: int, n: int) -> Iterator[np.ndarray]:
 
 
 def paired(master: str, stab: str, start: int, n: int) -> Iterator[tuple[np.ndarray, np.ndarray]]:
-    """(master, stab) frames in step from both renders, stopping at the shorter."""
+    """(master, stab) frames in step from both renders, stopping at the shorter. Both streams are read to the end, so
+    an ffmpeg failure on either raises even when the other ran out first."""
     gm, gs = stream(master, start, n), stream(stab, start, n)
     try:
         yield from zip(gm, gs)
+        for g in (gm, gs):
+            for _ in g:
+                pass
     finally:
         gm.close()
         gs.close()
@@ -239,8 +245,11 @@ def main() -> None:
                "under_title_frames": sum(max(0, min(hi, e) - max(lo, b)) for b, e in overlays)}
         if name not in placed:
             row["frames"], mean_abs, max_abs = diff_unchanged(paired(a.master, a.stab, k, n))
-            row.update(mean_abs=round(mean_abs, 3), max_abs=max_abs,
-                       verdict="identical" if max_abs == 0 else ("near" if mean_abs < 0.5 else "DIFFERS"))
+            if not row["frames"]:  # a render ran out before this cut: nothing compared is not a pass
+                row.update(verdict="NO FRAMES")
+            else:
+                row.update(mean_abs=round(mean_abs, 3), max_abs=max_abs,
+                           verdict="identical" if max_abs == 0 else ("near" if mean_abs < 0.5 else "DIFFERS"))
             rows.append(row)
             print(row, flush=True)
             continue
@@ -248,9 +257,10 @@ def main() -> None:
         composed = composed_crop(placed[name].get("transform"), angle_tr.get(name))
         ref = 1.0 if composed else z          # what the overlay's scale against the master should be
         got, fit, offs, cs, cm = measure_placed(paired(a.master, a.stab, k, n), n, a.step, ref)
-        if got < n:  # a render ran short: the probes and grid follow the frames there are, so measure again
-            n = row["frames"] = got
+        if 0 < got < n:  # a render ran short: the probes and grid follow the frames there are, so measure again
+            n = got
             got, fit, offs, cs, cm = measure_placed(paired(a.master, a.stab, k, n), n, a.step, ref)
+        row["frames"] = got
         if not fit:
             row.update(verdict="NOT REGISTERED")
             rows.append(row)
