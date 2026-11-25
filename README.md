@@ -70,7 +70,8 @@ not, jumped 10%. Three rules in `src/gigsteady/edits.py` and `gigsteady eval bou
 - **Overlay zoom** is the editor's zoom divided by the stabiliser's, but never less than what covers the frame at the
   cut's rotation, pan and tilt. A cut left unstabilised beside a placed overlay of the same take, at the same editor
   zoom, is zoomed to show the overlay's crop (`manifest.py --items` writes `crop_matches.json`; `resolve_place.py`
-  applies it, and leaves a Dynamic Zoom cut to the editor).
+  applies it, and leaves a Dynamic Zoom cut to the editor). Each overlay's log line says how much tighter the cover
+  made it, on top of the stabiliser's crop. Place before any Render in Place: a RiP bakes the frame in, black edges included.
 - **Check the render.** `gigsteady eval boundaries <render> --record-in N --overlays <job>/place_state.json` measures
   the scale step across every overlay boundary from the pixels and fails (exit 1) on a 2-30% step where both sides
   show the same picture. Bigger steps are deliberate wide/tight cuts and pass; an editor's own small punch-in at an

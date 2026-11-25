@@ -59,6 +59,44 @@ def compose(angle: dict, item: dict, stab_zoom: float = 1.0, frame: tuple[int, i
     return {"ZoomX": round(zx, 6), "ZoomY": round(zy, 6), "RotationAngle": round(rot, 6), "Pan": pan, "Tilt": tilt}
 
 
+def manifest_problem(rows) -> str | None:
+    """Why a manifest.json can't be placed, or None. scripts/manifest.py writes a list of rows with a status; rows to
+    place ("ok", "editor") carry place_start. A "missing" row (no output yet) stops the run by name."""
+    if not isinstance(rows, list) or any(not isinstance(m, dict) or "status" not in m for m in rows):
+        return "not scripts/manifest.py output (a list of rows with a status); run scripts/manifest.py <job> first"
+    bad = [m.get("name") for m in rows if m["status"] in ("ok", "editor") and "place_start" not in m]
+    if bad:
+        return f"rows without place_start: {bad}; run scripts/manifest.py <job> again"
+    missing = [m.get("name") for m in rows if m["status"] == "missing"]
+    if missing:
+        return f"outputs missing for {missing}: render them, or drop them from shots.json, then rerun scripts/manifest.py"
+    return None
+
+
+def cover_extra(placed_zoom: float, editor_zoom: float, stab_zoom: float) -> float:
+    """How much tighter than the editor's framing an overlay ends up because its zoom had to cover the pan/tilt
+    (1.0 = none). The stabilised output has no picture outside its crop, so a large pan costs framing."""
+    return placed_zoom / max(editor_zoom / stab_zoom, 1.0)
+
+
+def group_for(original_group: str | None, angle: str, groups: list[str]) -> tuple[str | None, str]:
+    """The colour group an overlay joins: its original's, else (multicam items report none) the group named after
+    its angle. Returns (name or None, how it was chosen)."""
+    if original_group:
+        return original_group, "original"
+    if angle in groups:
+        return angle, "angle name"
+    return None, "none"
+
+
+def cdl_matches(orig, new, nodes: int) -> bool:
+    """CopyGrades read-back for CDL grades (LUT paths alone don't show a CDL): every node's GetCDL equal. True when
+    the API has no GetCDL (older Resolve)."""
+    if not callable(getattr(orig, "GetCDL", None)):
+        return True
+    return all(orig.GetCDL(i) == new.GetCDL(i) for i in range(1, nodes + 1))
+
+
 class Placer:
     def __init__(self, resolve, job: Path, master_name: str, dup_name: str, log=print):
         self.r, self.job, self.log = resolve, Path(job), log
@@ -188,7 +226,12 @@ class Placer:
             check((it.GetStart(), it.GetEnd(), it.GetLeftOffset()) ==
                   (m["record_start"], m["record_end"], m["place_start"]),
                   f"{m['name']}: placed at {(it.GetStart(), it.GetEnd(), it.GetLeftOffset())}")
-            g = orig.GetColorGroup()
+            og0 = orig.GetColorGroup()
+            groups = {x.GetName(): x for x in (self.p.GetColorGroupsList() or [])}
+            gname, how = group_for(og0.GetName() if og0 else None, m["angle"], list(groups))
+            g = og0 or groups.get(gname)
+            if how == "angle name":
+                self.log(f"{m['name']}: original reports no colour group; joined group {gname!r} by angle name")
             if g is not None:
                 it.AssignToColorGroup(g)
                 check(it.GetColorGroup() is not None and it.GetColorGroup().GetName() == g.GetName(),
@@ -197,7 +240,11 @@ class Placer:
             og, ng = orig.GetNodeGraph(), it.GetNodeGraph()
             check(og.GetNumNodes() == ng.GetNumNodes() and
                   all(og.GetLUT(i) == ng.GetLUT(i) for i in range(1, og.GetNumNodes() + 1)),
-                  f"{m['name']}: grade read-back")
+                  f"{m['name']}: grade read-back (LUTs)")
+            check(cdl_matches(orig, it, og.GetNumNodes()), f"{m['name']}: grade read-back (CDLs)")
+            if not callable(getattr(orig, "GetCDL", None)) and not self.state.get("cdl_check_skipped"):
+                self.state["cdl_check_skipped"] = True
+                self.log("this Resolve has no TimelineItem.GetCDL: grade read-back compares LUTs only")
             tr = compose(m.get("angle_transform") or {}, {k: props.get(k) for k in
                                                          ("ZoomX", "ZoomY", "RotationAngle", "Pan", "Tilt")
                                                          if props.get(k) is not None},
@@ -206,7 +253,13 @@ class Placer:
                 if abs((it.GetProperty(k) or 0) - v) > 1e-4:
                     it.SetProperty(k, v)
                     check(abs(it.GetProperty(k) - v) < 1e-3, f"{m['name']}: {k} read back {it.GetProperty(k)} != {v}")
+            editor = (props.get("ZoomX") or 1.0) * ((m.get("angle_transform") or {}).get("zoom") or (1.0, 1.0))[0]
+            extra = cover_extra(tr["ZoomX"], editor, float(m.get("stab_zoom") or 1.0))
+            if extra > 1.001:
+                self.log(f"{m['name']}: {100 * (extra - 1):.1f}% tighter from covering its rotation, pan and tilt "
+                         "(on top of the stabiliser's crop)")
             self.state["placed"].append({"name": m["name"], "record_start": m["record_start"],
+                                         "cover_extra": round(extra, 4), "group_by": how,
                                          "record_end": m["record_end"], "item": it.GetUniqueId(),
                                          "editor_zoom": props.get("ZoomX", 1.0), "stab_zoom": m.get("stab_zoom"),
                                          "angle_zoom": ((m.get("angle_transform") or {}).get("zoom") or (1.0, 1.0))[0], "original": orig.GetUniqueId(),

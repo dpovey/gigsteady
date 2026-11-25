@@ -24,7 +24,11 @@ if sys.argv[2] == "--replace":
     print("REPLACE DONE")
     sys.exit(0)
 shots = {s["name"]: s for s in json.loads((job / "shots.json").read_text())}
-manifest = [dict(shots[m["name"]], **m) for m in json.loads((job / "manifest.json").read_text())]
+rows = json.loads((job / "manifest.json").read_text())
+problem = place.manifest_problem(rows)
+if problem:
+    sys.exit(f"{job / 'manifest.json'}: {problem}")
+manifest = [dict(shots[m["name"]], **m) for m in rows]
 pl = place.Placer(r, job, sys.argv[2], sys.argv[3], log=lambda *a: print(*a, flush=True))
 try:
     st = pl.run(manifest)

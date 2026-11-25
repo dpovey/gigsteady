@@ -140,3 +140,33 @@ def test_item_from_dict_reads_both_list_formats():
                         "angle_source_frame": 32649, "dynamic_zoom": True})
     b = item_from_dict(shot(TE2[1]))
     assert continues(a, b) and a.dynamic_zoom
+
+
+def test_place_helpers_cover_cost_group_and_cdl_readback():
+    from gigsteady.resolve.place import cdl_matches, cover_extra, group_for
+    assert cover_extra(1.485, 1.5, 1.10) == pytest.approx(1.485 / (1.5 / 1.10))        # ~8.9% tighter (pan -928)
+    assert cover_extra(1.0, 1.0, 1.10) == pytest.approx(1.0)                           # unzoomed: no cost beyond the crop
+    assert group_for("CAM A grp", "CAM A", ["CAM A"]) == ("CAM A grp", "original")
+    assert group_for(None, "CAM A", ["CAM A", "CAM B"]) == ("CAM A", "angle name")     # multicam items report no group
+    assert group_for(None, "CAM E", ["CAM A"]) == (None, "none")
+
+    class It:
+        def __init__(self, cdls):
+            self.c = cdls
+
+        def GetCDL(self, i):
+            return self.c[i - 1]
+    a = It([{"Slope": "1 1 1"}, {"Slope": "1.1 1 1"}])
+    assert cdl_matches(a, It([{"Slope": "1 1 1"}, {"Slope": "1.1 1 1"}]), 2)
+    assert not cdl_matches(a, It([{"Slope": "1 1 1"}, {"Slope": "1 1 1"}]), 2)
+    assert cdl_matches(object(), object(), 2)                                          # no GetCDL: LUT check only
+
+
+def test_manifest_problem_names_what_to_do():
+    from gigsteady.resolve.place import manifest_problem
+    ok = {"name": "A", "status": "ok", "place_start": 25}
+    assert manifest_problem([ok, {"name": "B", "status": "editor", "place_start": 25},
+                             {"name": "C", "status": "frame count 3 != 4", "place_start": 25}]) is None
+    assert "not scripts/manifest.py output" in manifest_problem({"rendered": [ok]})       # a hand-made dict
+    assert "missing for ['B']" in manifest_problem([ok, {"name": "B", "status": "missing"}])
+    assert "without place_start" in manifest_problem([{"name": "A", "status": "ok"}])
