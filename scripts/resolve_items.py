@@ -28,5 +28,6 @@ for t in range(1, tl.GetTrackCount("video") + 1):
                              "src_start": it.GetSourceStartFrame(), "src_end": it.GetSourceEndFrame(),
                              "enabled": it.GetClipEnabled(), "id": it.GetUniqueId(),
                              "type": props.get("Type"), "path": props.get("File Path"),
-                             "clip_name": props.get("Clip Name")})
+                             "clip_name": props.get("Clip Name"),
+                             "dynamic_zoom": bool(it.GetProperty("DynamicZoomEnabled"))})
 print(json.dumps(out, indent=1))

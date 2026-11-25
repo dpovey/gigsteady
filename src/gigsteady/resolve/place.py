@@ -12,6 +12,8 @@ import datetime as dt
 import json
 from pathlib import Path
 
+from ..edits import matched_zoom, overlay_zoom
+
 
 class Mismatch(RuntimeError):
     pass
@@ -44,13 +46,17 @@ def snapshot(tl) -> dict:
             for t in range(1, tl.GetTrackCount("video") + 1)}
 
 
-def compose(angle: dict, item: dict) -> dict:
+def compose(angle: dict, item: dict, stab_zoom: float = 1.0, frame: tuple[int, int] = (3840, 2160)) -> dict:
     """Angle transform (inside the multicam) then the item's own: zoom multiplies, rotation adds, pan/tilt are the
-    item's (applied last, in timeline pixels). The stabiliser's crop is already baked into the output."""
+    item's (applied last, in timeline pixels). The stabiliser's crop is already baked into the output, so the
+    overlay's zoom is the editor's over the stab zoom, and never under what covers the frame at the item's pan/tilt
+    (gigsteady.edits.overlay_zoom; on one song the editor's zoom alone made the six zoomed overlays ~10% tighter, and
+    editor/stab alone left black bands on four overlays with large pans)."""
     az = (angle.get("zoom") or (1.0, 1.0))[0]
-    return {"ZoomX": round(item.get("ZoomX", 1.0) * az, 6), "ZoomY": round(item.get("ZoomY", 1.0) * az, 6),
-            "RotationAngle": round(item.get("RotationAngle", 0.0) + angle.get("rotation", 0.0), 6),
-            "Pan": item.get("Pan", 0.0), "Tilt": item.get("Tilt", 0.0)}
+    pan, tilt = item.get("Pan", 0.0), item.get("Tilt", 0.0)
+    rot = item.get("RotationAngle", 0.0) + angle.get("rotation", 0.0)
+    zx, zy = (overlay_zoom(item.get(k, 1.0) * az, stab_zoom, pan, tilt, *frame, rotation=rot) for k in ("ZoomX", "ZoomY"))
+    return {"ZoomX": round(zx, 6), "ZoomY": round(zy, 6), "RotationAngle": round(rot, 6), "Pan": pan, "Tilt": tilt}
 
 
 class Placer:
@@ -143,21 +149,30 @@ class Placer:
         self.state["created"]["bin"] = folder.GetUniqueId()
         self.save()
         self.mp.SetCurrentFolder(folder)
+        for m in manifest:
+            if m["status"] == "editor":   # a through-edit part that can't be placed by script: the editor places it
+                self.state["skipped"].append({"name": m["name"], "record_start": m["record_start"],
+                                              "reason": f"through-edit part ({m.get('editor_why') or 'editor'}): place by hand"})
         rows = [m for m in manifest if m["status"] == "ok"]
-        mpis = self.mp.ImportMedia([m["output"] for m in rows]) or []
+        paths = list(dict.fromkeys(m["output"] for m in rows))   # one output can serve several parts
+        mpis = self.mp.ImportMedia(paths) or []
         self.state["created"]["media"] = [x.GetUniqueId() for x in mpis]
         self.save()
         by_path = {x.GetClipProperty("File Path"): x for x in mpis}
-        check(len(mpis) == len(rows) and all(m["output"] in by_path for m in rows), "import count/paths")
+        check(len(mpis) == len(paths) and all(p in by_path for p in paths), "import count/paths")
         self.log(f"imported {len(mpis)} clips into bin {name}")
 
         # 5. place, grade, transform: one clip at a time
         v1 = {(it.GetStart(), it.GetEnd()): it for it in dup.GetItemListInTrack("video", 1)}
+        frame = (int(dup.GetSetting("timelineResolutionWidth") or 3840), int(dup.GetSetting("timelineResolutionHeight") or 2160))
         self.state["created"]["items"] = []
         for m in rows:
             orig = v1.get((m["record_start"], m["record_end"]))
             check(orig is not None and orig.GetName().endswith(m["angle"]), f"{m['name']}: original not found on V1")
             props = orig.GetProperty() or {}
+            # a merged through-edit assumed no part had Dynamic Zoom; one that has it now would leave a crop jump
+            check(not (m.get("part_of") and props.get("DynamicZoomEnabled")),
+                  f"{m['name']}: through-edit part at {m['record_start']} has Dynamic Zoom; rebuild the shot list")
             if skip_dynamic_zoom and props.get("DynamicZoomEnabled"):
                 self.state["skipped"].append({"name": m["name"], "reason": "dynamic zoom on the original"})
                 self.save()
@@ -185,18 +200,52 @@ class Placer:
                   f"{m['name']}: grade read-back")
             tr = compose(m.get("angle_transform") or {}, {k: props.get(k) for k in
                                                          ("ZoomX", "ZoomY", "RotationAngle", "Pan", "Tilt")
-                                                         if props.get(k) is not None})
+                                                         if props.get(k) is not None},
+                         float(m.get("stab_zoom") or 1.0), frame)
             for k, v in tr.items():
                 if abs((it.GetProperty(k) or 0) - v) > 1e-4:
                     it.SetProperty(k, v)
                     check(abs(it.GetProperty(k) - v) < 1e-3, f"{m['name']}: {k} read back {it.GetProperty(k)} != {v}")
-            self.state["placed"].append({"name": m["name"], "item": it.GetUniqueId(), "original": orig.GetUniqueId(),
+            self.state["placed"].append({"name": m["name"], "record_start": m["record_start"],
+                                         "record_end": m["record_end"], "item": it.GetUniqueId(),
+                                         "editor_zoom": props.get("ZoomX", 1.0), "stab_zoom": m.get("stab_zoom"),
+                                         "angle_zoom": ((m.get("angle_transform") or {}).get("zoom") or (1.0, 1.0))[0], "original": orig.GetUniqueId(),
                                          "nodes": ng.GetNumNodes(), "lut": ng.GetLUT(1) if ng.GetNumNodes() else None,
                                          "group": g.GetName() if g else None, "transform": tr})
             self.save()
             self.log(m["name"], "placed", tr)
 
-        # 6. master untouched; restore the view
+        # 6. rule (b): an unstabilised item showing the same picture across a through-edit takes the overlay's crop,
+        #    only beside an overlay placed in this run, never on a Dynamic Zoom item (logged for the editor)
+        self.state["crop_matched"] = []
+        cm_p = self.job / "crop_matches.json"
+        placed = {(x["record_start"], x["record_end"]): x for x in self.state["placed"]}
+        for c in json.loads(cm_p.read_text()) if cm_p.exists() else []:
+            ov = placed.get((c["overlay_record_start"], c["overlay_record_end"]))
+            rec = {**c}
+            if ov is None:
+                rec["result"] = "skipped: overlay not placed"
+            elif c.get("dynamic_zoom"):
+                rec["result"] = "editor: Dynamic Zoom item, match its crop by hand"
+            else:
+                it = v1.get((c["record_start"], c["record_end"]))
+                check(it is not None and it.GetName().endswith(c["angle"]), f"crop match {c['record_start']}: item not found")
+                check(not it.GetProperty("DynamicZoomEnabled"), f"crop match {c['record_start']}: has Dynamic Zoom")
+                was = {k: it.GetProperty(k) or 1.0 for k in ("ZoomX", "ZoomY")}
+                want = matched_zoom(was["ZoomX"], ov["editor_zoom"] or 1.0, ov["transform"]["ZoomX"],
+                                    float(ov["stab_zoom"] or 1.0), ov["angle_zoom"] or 1.0)
+                if want is None:
+                    rec["result"] = "unchanged: editor zooms differ, or already matching"
+                else:
+                    for k in ("ZoomX", "ZoomY"):
+                        it.SetProperty(k, round(want, 6))
+                        check(abs(it.GetProperty(k) - want) < 1e-3, f"crop match {c['record_start']}: {k} {it.GetProperty(k)} != {want}")
+                    rec.update(result="matched", was=was, zoom=round(want, 6), item=it.GetUniqueId())
+            self.state["crop_matched"].append(rec)
+            self.save()
+            self.log(f"crop match {c['record_start']} beside {c['overlay']}: {rec['result']}")
+
+        # 7. master untouched; restore the view
         check(snapshot(master) == before, "master changed")
         self.restore()
         self.state["finished"] = dt.datetime.now().isoformat()

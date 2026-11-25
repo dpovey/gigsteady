@@ -58,6 +58,25 @@ timelines cut by cut. Resolve API behaviours found along the way are noted in th
 reads `False` on a timeline that isn't current, and a flag on a multicam cut lands on the shared multicam clip, so
 `resolve_mark_cuts.py` marks cuts with timeline markers instead).
 
+A stabilised shot is a tighter crop of its picture (about 1.10 in track mode). Next to the same picture that crop
+shows as a zoom jump: on one delivered song, a cut inside one camera take, with one side stabilised and the other
+not, jumped 10%. Three rules in `src/gigsteady/edits.py` and `gigsteady eval boundaries` prevent it:
+
+- **Through-edits are one shot.** Adjacent cuts of one take (same angle and file, source running on) are stabilised
+  together, with one camera path, and placed back cut by cut. If one cut can't be (Dynamic Zoom, or not selected),
+  none is (`shots_from_fcpxml.py --through-edits neither`, the default), or the take is rendered whole and that cut
+  is left to the editor (`render-all`). Source frames may differ by one at the edit (API rounding), so a real
+  one-frame jump in the source counts as continuous.
+- **Overlay zoom** is the editor's zoom divided by the stabiliser's, but never less than what covers the frame at the
+  cut's rotation, pan and tilt. A cut left unstabilised beside a placed overlay of the same take, at the same editor
+  zoom, is zoomed to show the overlay's crop (`manifest.py --items` writes `crop_matches.json`; `resolve_place.py`
+  applies it, and leaves a Dynamic Zoom cut to the editor).
+- **Check the render.** `gigsteady eval boundaries <render> --record-in N --overlays <job>/place_state.json` measures
+  the scale step across every overlay boundary from the pixels and fails (exit 1) on a 2-30% step where both sides
+  show the same picture. Bigger steps are deliberate wide/tight cuts and pass; an editor's own small punch-in at an
+  overlay boundary also fails and needs a look. On six delivered songs it fails the one jump and nothing else
+  (`tests/fixtures/boundaries`).
+
 An OpenFX plugin front end is being explored: [docs/OFX-EXPLORATION.md](docs/OFX-EXPLORATION.md).
 
 ## Tests

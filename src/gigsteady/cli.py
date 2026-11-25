@@ -90,8 +90,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--crop", help="x,y of the full-resolution crop (default: frame centre)")
     p.add_argument("--jobs", type=int, default=3)
     sub.add_parser("analyse-frames", help="analysis for the OFX plugin: raw luma frames on stdin (see frames.py)")
-    p = sub.add_parser("eval", help="independent checks: gyro-truth <clip> <start:n>...")
-    p.add_argument("what", choices=["gyro-truth"])
+    p = sub.add_parser("eval", help="independent checks: gyro-truth <clip> <start:n>... | boundaries <render> "
+                                    "--record-in N --overlays manifest.json")
+    p.add_argument("what", choices=["gyro-truth", "boundaries"])
     p.add_argument("rest", nargs=argparse.REMAINDER)
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["analyse-frames"]:  # its own flags (argparse REMAINDER can't take leading --options)
@@ -104,6 +105,9 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "stabilise":
         from .pipeline import stabilise
         stabilise(a.clip, a.in_frame, a.out_frame, a.output, options(a), render_video=not a.no_render)
+    elif a.cmd == "eval" and a.what == "boundaries":
+        from .eval import boundaries
+        return boundaries.main(a.rest)
     elif a.cmd == "eval":
         from .eval import gyro_truth
         gyro_truth.main(a.rest)
